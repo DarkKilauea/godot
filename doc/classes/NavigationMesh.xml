@@ -85,6 +85,8 @@
 		</member>
 		<member name="agent_max_slope" type="float" setter="set_agent_max_slope" getter="get_agent_max_slope" default="45.0">
 			The maximum slope that is considered walkable, in degrees.
+			This is based off the difference between the slope's surface normal and the navigation map's up vector.
+			The practical upper limit of this property is usually around 85 degrees.
 		</member>
 		<member name="agent_radius" type="float" setter="set_agent_radius" getter="get_agent_radius" default="0.5">
 			The distance to erode/shrink the walkable area of the heightfield away from obstructions.
@@ -92,9 +94,16 @@
 		</member>
 		<member name="cell_height" type="float" setter="set_cell_height" getter="get_cell_height" default="0.25">
 			The Y axis cell size to use for fields.
+			A good starting point is half of [member cell_size].
+			Smaller values ensure that the navigation mesh properly connects areas that are only separated by a small curb or ditch. Decrease this value if you find small holes near where there are changes in height.
+			However, avoid decreasing this value too much as it will increase total baking time.
 		</member>
 		<member name="cell_size" type="float" setter="set_cell_size" getter="get_cell_size" default="0.25">
-			The XZ plane cell size to use for fields.
+			The XZ plane cell size to use for fields. 
+			Recommended values are between a half and a third of the agent's radius. 
+			For outdoor environments [code]agent_radius/2.0[/code] is often good enough, however for indoor environments you may want the extra precision of [code]agent_radius/3.0[/code]. 
+			Avoid decreasing this value too much, as total baking time increased exponentially with smaller cell sizes and quickly approaches deminishing returns. 
+			The general recommendation here is to use the largest cell size as you can get away with.
 		</member>
 		<member name="detail_sample_distance" type="float" setter="set_detail_sample_distance" getter="get_detail_sample_distance" default="6.0">
 			The sampling distance to use when generating the detail mesh, in cell unit.
