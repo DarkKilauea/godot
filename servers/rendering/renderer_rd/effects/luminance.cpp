@@ -92,9 +92,11 @@ void Luminance::LuminanceBuffers::configure(RenderSceneBuffersRD *p_render_buffe
 		h = MAX(h / 8, 1);
 
 		RD::TextureFormat tf;
+		tf.texture_type = RD::TEXTURE_TYPE_2D_ARRAY;
 		tf.format = RD::DATA_FORMAT_R32_SFLOAT;
 		tf.width = w;
 		tf.height = h;
+		tf.array_layers = 3;
 
 		bool final = w == 1 && h == 1;
 

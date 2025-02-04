@@ -49,7 +49,7 @@ layout(set = 0, binding = 0) uniform sampler2D source_color;
 #endif
 
 #ifdef GLOW_USE_AUTO_EXPOSURE
-layout(set = 1, binding = 0) uniform sampler2D source_auto_exposure;
+layout(set = 1, binding = 0) uniform sampler2DArray source_auto_exposure;
 #endif
 
 #if defined(MODE_LINEARIZE_DEPTH_COPY) || defined(MODE_SIMPLE_COPY_DEPTH)
@@ -185,8 +185,7 @@ void main() {
 
 	if (bool(params.flags & FLAG_GLOW_FIRST_PASS)) {
 #ifdef GLOW_USE_AUTO_EXPOSURE
-
-		color /= texelFetch(source_auto_exposure, ivec2(0, 0), 0).r / params.glow_auto_exposure_scale;
+		color /= texelFetch(source_auto_exposure, ivec3(0, 0, 0), 0).r / params.glow_auto_exposure_scale;
 #endif
 		color *= params.glow_exposure;
 

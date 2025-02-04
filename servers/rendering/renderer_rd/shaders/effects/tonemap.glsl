@@ -56,7 +56,7 @@ layout(set = 0, binding = 0) uniform sampler2DArray source_color;
 layout(set = 0, binding = 0) uniform sampler2D source_color;
 #endif
 
-layout(set = 1, binding = 0) uniform sampler2D source_auto_exposure;
+layout(set = 1, binding = 0) uniform sampler2DArray source_auto_exposure;
 #ifdef USE_MULTIVIEW
 layout(set = 2, binding = 0) uniform sampler2DArray source_glow;
 #else
@@ -349,28 +349,26 @@ vec3 linear_to_srgb(vec3 color) {
 	return mix((vec3(1.0f) + a) * pow(color.rgb, vec3(1.0f / 2.4f)) - a, 12.92f * color.rgb, lessThan(color.rgb, vec3(0.0031308f)));
 }
 
-vec3 normalize(vec3 value, vec3 min, vec3 max) {
-	return (value - min) / (max - min);
-}
-
-vec3 denormalize(vec3 value, vec3 min, vec3 max) {
-	return value * (max - min) + min;
-}
-
 #define TONEMAPPER_LINEAR 0
 #define TONEMAPPER_REINHARD 1
 #define TONEMAPPER_FILMIC 2
 #define TONEMAPPER_ACES 3
 #define TONEMAPPER_AGX 4
 
-vec3 apply_tonemapping(vec3 color, float white) { // inputs are LINEAR
+vec3 apply_tonemapping(vec3 color, float white, float source_max_value, float dest_max_value) { // inputs are LINEAR
 	// Ensure color values passed to tonemappers are positive.
 	// They can be negative in the case of negative lights, which leads to undesired behavior.
 	// Linear is special: it always passes through with no adjustments.
 
 	if (params.tonemapper == TONEMAPPER_LINEAR) {
 		return color;
-	} else if (params.tonemapper == TONEMAPPER_REINHARD) {
+	}
+
+	// Compress color to the [0, 1] range for tonemapping.
+	float shrink_factor = 1.0f / max(source_max_value, 1.0f);
+	color *= vec3(shrink_factor);
+
+	if (params.tonemapper == TONEMAPPER_REINHARD) {
 		color = tonemap_reinhard(max(vec3(0.0f), color), white);
 	} else if (params.tonemapper == TONEMAPPER_FILMIC) {
 		color = tonemap_filmic(max(vec3(0.0f), color), white);
@@ -381,9 +379,7 @@ vec3 apply_tonemapping(vec3 color, float white) { // inputs are LINEAR
 	}
 
 	// Expand color to the target output range for HDR render targets.
-	if (!bool(params.flags & FLAG_CONVERT_TO_SRGB)) {
-		color = denormalize(color, vec3(params.dest_min_value), vec3(params.dest_max_value));
-	}
+	color *= vec3(max(dest_max_value, 1.0f));
 
 	return color;
 }
@@ -432,32 +428,27 @@ vec3 gather_glow(sampler2D tex, vec2 uv) { // sample all selected glow levels
 #define GLOW_MODE_REPLACE 3
 #define GLOW_MODE_MIX 4
 
-vec3 apply_glow(vec3 color, vec3 glow, bool hdrInput) { // apply glow using the selected blending mode
+vec3 apply_glow(vec3 color, vec3 glow, float source_max_value) { // apply glow using the selected blending mode
 	if (params.glow_mode == GLOW_MODE_ADD) {
 		return color + glow;
 	} else if (params.glow_mode == GLOW_MODE_SCREEN) {
-		if (hdrInput) {
-			// Compress the color and glow from scene intensity to [0, 1] to avoid artifacts due to the color clamping.
-			color = normalize(color, vec3(params.source_min_value), vec3(params.source_max_value));
-			glow = normalize(glow, vec3(params.source_min_value), vec3(params.source_max_value));
-		}
+		// Compress the color and glow from scene intensity to [0, 1] to avoid artifacts due to the color clamping.
+		float shrink_factor = 1.0f / max(source_max_value, 1.0f);
+		color *= vec3(shrink_factor);
+		glow *= vec3(shrink_factor);
 
 		// Needs color clamping.
 		glow.rgb = clamp(glow.rgb, vec3(0.0f), vec3(1.0f));
 		color = max((color + glow) - (color * glow), vec3(0.0));
 
-		if (hdrInput) {
-			// Expand the color back to the original intensity range.
-			color = denormalize(color, vec3(params.source_min_value), vec3(params.source_max_value));
-		}
+		color *= max(source_max_value, 1.0f);
 
 		return color;
 	} else if (params.glow_mode == GLOW_MODE_SOFTLIGHT) {
-		if (hdrInput) {
-			// Compress the color and glow from scene intensity to [0, 1] to avoid artifacts due to the color clamping.
-			color = normalize(color, vec3(params.source_min_value), vec3(params.source_max_value));
-			glow = normalize(glow, vec3(params.source_min_value), vec3(params.source_max_value));
-		}
+		// Compress the color and glow from scene intensity to [0, 1] to avoid artifacts due to the color clamping.
+		float shrink_factor = 1.0f / max(source_max_value, 1.0f);
+		color *= vec3(shrink_factor);
+		glow *= vec3(shrink_factor);
 
 		// Needs color clamping.
 		glow.rgb = clamp(glow.rgb, vec3(0.0f), vec3(1.0f));
@@ -467,10 +458,7 @@ vec3 apply_glow(vec3 color, vec3 glow, bool hdrInput) { // apply glow using the 
 		color.g = (glow.g <= 0.5f) ? (color.g - (1.0f - 2.0f * glow.g) * color.g * (1.0f - color.g)) : (((glow.g > 0.5f) && (color.g <= 0.25f)) ? (color.g + (2.0f * glow.g - 1.0f) * (4.0f * color.g * (4.0f * color.g + 1.0f) * (color.g - 1.0f) + 7.0f * color.g)) : (color.g + (2.0f * glow.g - 1.0f) * (sqrt(color.g) - color.g)));
 		color.b = (glow.b <= 0.5f) ? (color.b - (1.0f - 2.0f * glow.b) * color.b * (1.0f - color.b)) : (((glow.b > 0.5f) && (color.b <= 0.25f)) ? (color.b + (2.0f * glow.b - 1.0f) * (4.0f * color.b * (4.0f * color.b + 1.0f) * (color.b - 1.0f) + 7.0f * color.b)) : (color.b + (2.0f * glow.b - 1.0f) * (sqrt(color.b) - color.b)));
 
-		if (hdrInput) {
-			// Expand the color back to the original intensity range.
-			color = denormalize(color, vec3(params.source_min_value), vec3(params.source_max_value));
-		}
+		color *= max(source_max_value, 1.0f);
 
 		return color;
 	} else { //replace
@@ -582,12 +570,25 @@ void main() {
 	// Exposure
 
 	float exposure = params.exposure;
+	float source_max_value = 1.0f;
+	float glow_source_max_value = params.source_max_value;
+	float dest_max_value = params.dest_max_value;
 
 #ifndef SUBPASS
 	if (bool(params.flags & FLAG_USE_AUTO_EXPOSURE)) {
-		exposure *= 1.0 / (texelFetch(source_auto_exposure, ivec2(0, 0), 0).r * params.luminance_multiplier / params.auto_exposure_scale);
+		exposure *= 1.0 / (texelFetch(source_auto_exposure, ivec3(0, 0, 0), 0).r * params.luminance_multiplier / params.auto_exposure_scale);
+
+		source_max_value = texelFetch(source_auto_exposure, ivec3(0, 0, 2), 0).r;
+		glow_source_max_value = source_max_value;
 	}
 #endif
+
+	// If not HDR, do nothing.
+	if (bool(params.flags & FLAG_CONVERT_TO_SRGB)) {
+		source_max_value = 1.0f;
+		glow_source_max_value = 1.0f;
+		dest_max_value = 1.0f;
+	}
 
 	color.rgb *= exposure;
 
@@ -607,7 +608,7 @@ void main() {
 	}
 #endif
 
-	color.rgb = apply_tonemapping(color.rgb, params.white);
+	color.rgb = apply_tonemapping(color.rgb, params.white, source_max_value, dest_max_value);
 
 	if (bool(params.flags & FLAG_CONVERT_TO_SRGB)) {
 		color.rgb = linear_to_srgb(color.rgb); // Regular linear -> SRGB conversion.
@@ -621,12 +622,12 @@ void main() {
 		}
 
 		// high dynamic range -> SRGB
-		glow = apply_tonemapping(glow, params.white);
+		glow = apply_tonemapping(glow, params.white, source_max_value, dest_max_value);
 		if (bool(params.flags & FLAG_CONVERT_TO_SRGB)) {
 			glow = linear_to_srgb(glow);
 		}
 
-		color.rgb = apply_glow(color.rgb, glow, !bool(params.flags & FLAG_CONVERT_TO_SRGB));
+		color.rgb = apply_glow(color.rgb, glow, source_max_value);
 	}
 #endif
 
