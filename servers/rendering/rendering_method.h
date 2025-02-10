@@ -186,11 +186,12 @@ public:
 
 	// Tonemap
 	virtual void environment_set_tonemap(RID p_env, RS::EnvironmentToneMapper p_tone_mapper, float p_exposure, float p_white) = 0;
-	virtual void environment_set_tonemap_range(RID p_env, float p_min_value, float p_max_value) = 0;
+	virtual void environment_set_tonemap_range(RID p_env, RS::ViewportHDRTonemapMode p_mode, float p_min_value, float p_max_value) = 0;
 
 	virtual RS::EnvironmentToneMapper environment_get_tone_mapper(RID p_env) const = 0;
 	virtual float environment_get_exposure(RID p_env) const = 0;
 	virtual float environment_get_white(RID p_env) const = 0;
+	virtual RS::ViewportHDRTonemapMode environment_get_hdr_tonemap_mode(RID p_env) const = 0;
 	virtual float environment_get_min_value(RID p_env) const = 0;
 	virtual float environment_get_max_value(RID p_env) const = 0;
 

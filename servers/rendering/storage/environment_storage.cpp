@@ -211,10 +211,11 @@ void RendererEnvironmentStorage::environment_set_tonemap(RID p_env, RS::Environm
 	env->white = p_white;
 }
 
-void RendererEnvironmentStorage::environment_set_tonemap_range(RID p_env, float p_min_value, float p_max_value) {
+void RendererEnvironmentStorage::environment_set_tonemap_range(RID p_env, RS::ViewportHDRTonemapMode p_mode, float p_min_value, float p_max_value) {
 	Environment *env = environment_owner.get_or_null(p_env);
 	ERR_FAIL_NULL(env);
 	ERR_FAIL_COND(p_min_value >= p_max_value);
+	env->hdr_tonemap_mode = p_mode;
 	env->min_value = p_min_value;
 	env->max_value = p_max_value;
 }
@@ -235,6 +236,12 @@ float RendererEnvironmentStorage::environment_get_white(RID p_env) const {
 	Environment *env = environment_owner.get_or_null(p_env);
 	ERR_FAIL_NULL_V(env, 1.0);
 	return env->white;
+}
+
+RS::ViewportHDRTonemapMode RendererEnvironmentStorage::environment_get_hdr_tonemap_mode(RID p_env) const {
+	Environment *env = environment_owner.get_or_null(p_env);
+	ERR_FAIL_NULL_V(env, RS::VIEWPORT_HDR_TONEMAP_MODE_NONE);
+	return env->hdr_tonemap_mode;
 }
 
 float RendererEnvironmentStorage::environment_get_min_value(RID p_env) const {

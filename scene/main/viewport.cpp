@@ -1206,14 +1206,14 @@ bool Viewport::is_using_hdr_2d() const {
 	return use_hdr_2d;
 }
 
-void Viewport::set_tonemap_to_window(bool p_enable) {
+void Viewport::set_tonemap_to_window(HDRTonemapMode p_mode) {
 	ERR_MAIN_THREAD_GUARD;
-	tonemap_to_window = p_enable;
-	RS::get_singleton()->viewport_set_tonemap_to_screen(viewport, p_enable);
+	tonemap_to_window = p_mode;
+	RS::get_singleton()->viewport_set_tonemap_to_screen(viewport, (RS::ViewportHDRTonemapMode)(int)p_mode);
 }
 
-bool Viewport::is_tonemapping_to_window() const {
-	ERR_READ_THREAD_GUARD_V(false);
+Viewport::HDRTonemapMode Viewport::get_tonemap_to_window() const {
+	ERR_READ_THREAD_GUARD_V(HDR_TONEMAP_NONE);
 	return tonemap_to_window;
 }
 
@@ -4788,8 +4788,8 @@ void Viewport::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("set_use_hdr_2d", "enable"), &Viewport::set_use_hdr_2d);
 	ClassDB::bind_method(D_METHOD("is_using_hdr_2d"), &Viewport::is_using_hdr_2d);
 
-	ClassDB::bind_method(D_METHOD("set_tonemap_to_window", "enable"), &Viewport::set_tonemap_to_window);
-	ClassDB::bind_method(D_METHOD("is_tonemapping_to_window"), &Viewport::is_tonemapping_to_window);
+	ClassDB::bind_method(D_METHOD("set_tonemap_to_window", "mode"), &Viewport::set_tonemap_to_window);
+	ClassDB::bind_method(D_METHOD("get_tonemap_to_window"), &Viewport::get_tonemap_to_window);
 
 	ClassDB::bind_method(D_METHOD("set_msaa_2d", "msaa"), &Viewport::set_msaa_2d);
 	ClassDB::bind_method(D_METHOD("get_msaa_2d"), &Viewport::get_msaa_2d);
@@ -4969,7 +4969,7 @@ void Viewport::_bind_methods() {
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "mesh_lod_threshold", PROPERTY_HINT_RANGE, "0,1024,0.1"), "set_mesh_lod_threshold", "get_mesh_lod_threshold");
 	ADD_PROPERTY(PropertyInfo(Variant::INT, "debug_draw", PROPERTY_HINT_ENUM, "Disabled,Unshaded,Lighting,Overdraw,Wireframe,Normal Buffer,VoxelGI Albedo,VoxelGI Lighting,VoxelGI Emission,Shadow Atlas,Directional Shadow Map,Scene Luminance,SSAO,SSIL,Directional Shadow Splits,Decal Atlas,SDFGI Cascades,SDFGI Probes,VoxelGI/SDFGI Buffer,Disable Mesh LOD,OmniLight3D Cluster,SpotLight3D Cluster,Decal Cluster,ReflectionProbe Cluster,Occlusion Culling Buffer,Motion Vectors,Internal Buffer"), "set_debug_draw", "get_debug_draw");
 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "use_hdr_2d"), "set_use_hdr_2d", "is_using_hdr_2d");
-	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "tonemap_to_window"), "set_tonemap_to_window", "is_tonemapping_to_window");
+	ADD_PROPERTY(PropertyInfo(Variant::INT, "tonemap_to_window", PROPERTY_HINT_ENUM, "None,Linear,SquishExpand"), "set_tonemap_to_window", "get_tonemap_to_window");
 
 #ifndef _3D_DISABLED
 	ADD_GROUP("Scaling 3D", "");
@@ -5118,6 +5118,10 @@ void Viewport::_bind_methods() {
 	BIND_ENUM_CONSTANT(VRS_UPDATE_ONCE);
 	BIND_ENUM_CONSTANT(VRS_UPDATE_ALWAYS);
 	BIND_ENUM_CONSTANT(VRS_UPDATE_MAX);
+
+	BIND_ENUM_CONSTANT(HDR_TONEMAP_NONE);
+	BIND_ENUM_CONSTANT(HDR_TONEMAP_LINEAR);
+	BIND_ENUM_CONSTANT(HDR_TONEMAP_SQUISH_EXPAND);
 }
 
 void Viewport::_validate_property(PropertyInfo &p_property) const {

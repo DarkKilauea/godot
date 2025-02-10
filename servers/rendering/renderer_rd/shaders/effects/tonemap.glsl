@@ -98,10 +98,9 @@ layout(push_constant, std430) uniform Params {
 	float auto_exposure_scale;
 	float luminance_multiplier;
 
-	float source_min_value;
-	float source_max_value;
-	float dest_min_value;
 	float dest_max_value;
+	uint hdr_tonemap_mode;
+	vec2 pad2;
 }
 params;
 
@@ -358,17 +357,13 @@ vec3 linear_to_srgb(vec3 color) {
 vec3 apply_tonemapping(vec3 color, float white, float source_max_value, float dest_max_value) { // inputs are LINEAR
 	// Ensure color values passed to tonemappers are positive.
 	// They can be negative in the case of negative lights, which leads to undesired behavior.
-	// Linear is special: it always passes through with no adjustments.
 
-	if (params.tonemapper == TONEMAPPER_LINEAR) {
-		return color;
-	}
-
-	// Compress color to the [0, 1] range for tonemapping.
 	float shrink_factor = 1.0f / max(source_max_value, 1.0f);
 	color *= vec3(shrink_factor);
 
-	if (params.tonemapper == TONEMAPPER_REINHARD) {
+	if (params.tonemapper == TONEMAPPER_LINEAR) {
+		color = color;
+	} else if (params.tonemapper == TONEMAPPER_REINHARD) {
 		color = tonemap_reinhard(max(vec3(0.0f), color), white);
 	} else if (params.tonemapper == TONEMAPPER_FILMIC) {
 		color = tonemap_filmic(max(vec3(0.0f), color), white);
@@ -378,7 +373,6 @@ vec3 apply_tonemapping(vec3 color, float white, float source_max_value, float de
 		color = tonemap_agx(color);
 	}
 
-	// Expand color to the target output range for HDR render targets.
 	color *= vec3(max(dest_max_value, 1.0f));
 
 	return color;
@@ -556,6 +550,10 @@ vec3 screen_space_dither(vec2 frag_coord) {
 	return (dither.rgb - 0.5) / 255.0;
 }
 
+#define VIEWPORT_HDR_TONEMAP_MODE_NONE 0
+#define VIEWPORT_HDR_TONEMAP_MODE_LINEAR 1
+#define VIEWPORT_HDR_TONEMAP_MODE_SQUISH_EXPAND 2
+
 void main() {
 #ifdef SUBPASS
 	// SUBPASS and USE_MULTIVIEW can be combined but in that case we're already reading from the correct layer
@@ -567,28 +565,35 @@ void main() {
 #endif
 	color.rgb *= params.luminance_multiplier;
 
+	// HDR Tonemapping
+	float tonemap_source_max_value = 1.0f;
+	float glow_source_max_value = 1.0f;
+	float dest_max_value = 1.0f;
+
+	switch (params.hdr_tonemap_mode) {
+		case VIEWPORT_HDR_TONEMAP_MODE_LINEAR:
+			tonemap_source_max_value = 1.0f;
+			glow_source_max_value = 16.0f;
+			dest_max_value = params.dest_max_value;
+			break;
+		case VIEWPORT_HDR_TONEMAP_MODE_SQUISH_EXPAND:
+			tonemap_source_max_value = texelFetch(source_auto_exposure, ivec3(0, 0, 2), 0).r;
+			glow_source_max_value = 16.0f;
+			dest_max_value = params.dest_max_value;
+			break;
+		default:
+			break;
+	}
+
 	// Exposure
 
 	float exposure = params.exposure;
-	float source_max_value = 1.0f;
-	float glow_source_max_value = params.source_max_value;
-	float dest_max_value = params.dest_max_value;
 
 #ifndef SUBPASS
 	if (bool(params.flags & FLAG_USE_AUTO_EXPOSURE)) {
 		exposure *= 1.0 / (texelFetch(source_auto_exposure, ivec3(0, 0, 0), 0).r * params.luminance_multiplier / params.auto_exposure_scale);
-
-		source_max_value = texelFetch(source_auto_exposure, ivec3(0, 0, 2), 0).r;
-		glow_source_max_value = source_max_value;
 	}
 #endif
-
-	// If not HDR, do nothing.
-	if (bool(params.flags & FLAG_CONVERT_TO_SRGB)) {
-		source_max_value = 1.0f;
-		glow_source_max_value = 1.0f;
-		dest_max_value = 1.0f;
-	}
 
 	color.rgb *= exposure;
 
@@ -608,7 +613,7 @@ void main() {
 	}
 #endif
 
-	color.rgb = apply_tonemapping(color.rgb, params.white, source_max_value, dest_max_value);
+	color.rgb = apply_tonemapping(color.rgb, params.white, tonemap_source_max_value, dest_max_value);
 
 	if (bool(params.flags & FLAG_CONVERT_TO_SRGB)) {
 		color.rgb = linear_to_srgb(color.rgb); // Regular linear -> SRGB conversion.
@@ -622,12 +627,12 @@ void main() {
 		}
 
 		// high dynamic range -> SRGB
-		glow = apply_tonemapping(glow, params.white, source_max_value, dest_max_value);
+		glow = apply_tonemapping(glow, params.white, tonemap_source_max_value, dest_max_value);
 		if (bool(params.flags & FLAG_CONVERT_TO_SRGB)) {
 			glow = linear_to_srgb(glow);
 		}
 
-		color.rgb = apply_glow(color.rgb, glow, source_max_value);
+		color.rgb = apply_glow(color.rgb, glow, glow_source_max_value);
 	}
 #endif
 

@@ -232,6 +232,12 @@ public:
 		VRS_UPDATE_MAX
 	};
 
+	enum HDRTonemapMode {
+		HDR_TONEMAP_NONE,
+		HDR_TONEMAP_LINEAR,
+		HDR_TONEMAP_SQUISH_EXPAND,
+	};
+
 private:
 	friend class ViewportTexture;
 
@@ -264,7 +270,7 @@ private:
 	bool transparent_bg = false;
 	bool use_hdr_2d = false;
 	bool gen_mipmaps = false;
-	bool tonemap_to_window = false;
+	HDRTonemapMode tonemap_to_window = HDR_TONEMAP_NONE;
 
 	bool snap_controls_to_pixels = true;
 	bool snap_2d_transforms_to_pixel = false;
@@ -542,8 +548,8 @@ public:
 	void set_use_hdr_2d(bool p_enable);
 	bool is_using_hdr_2d() const;
 
-	void set_tonemap_to_window(bool p_enable);
-	bool is_tonemapping_to_window() const;
+	void set_tonemap_to_window(HDRTonemapMode p_mode);
+	HDRTonemapMode get_tonemap_to_window() const;
 
 	Ref<ViewportTexture> get_texture() const;
 
@@ -894,6 +900,7 @@ VARIANT_ENUM_CAST(Viewport::SDFScale);
 VARIANT_ENUM_CAST(Viewport::SDFOversize);
 VARIANT_ENUM_CAST(Viewport::VRSMode);
 VARIANT_ENUM_CAST(Viewport::VRSUpdateMode);
+VARIANT_ENUM_CAST(Viewport::HDRTonemapMode);
 VARIANT_ENUM_CAST(SubViewport::ClearMode);
 VARIANT_ENUM_CAST(Viewport::RenderInfo);
 VARIANT_ENUM_CAST(Viewport::RenderInfoType);

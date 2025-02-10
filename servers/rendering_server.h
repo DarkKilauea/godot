@@ -966,7 +966,13 @@ public:
 
 	virtual void viewport_attach_to_screen(RID p_viewport, const Rect2 &p_rect = Rect2(), DisplayServer::WindowID p_screen = DisplayServer::MAIN_WINDOW_ID) = 0;
 	virtual void viewport_set_render_direct_to_screen(RID p_viewport, bool p_enable) = 0;
-	virtual void viewport_set_tonemap_to_screen(RID p_viewport, bool p_enable) = 0;
+
+	enum ViewportHDRTonemapMode {
+		VIEWPORT_HDR_TONEMAP_MODE_NONE,
+		VIEWPORT_HDR_TONEMAP_MODE_LINEAR,
+		VIEWPORT_HDR_TONEMAP_MODE_SQUISH_EXPAND,
+	};
+	virtual void viewport_set_tonemap_to_screen(RID p_viewport, ViewportHDRTonemapMode p_mode) = 0;
 
 	virtual void viewport_set_scaling_3d_mode(RID p_viewport, ViewportScaling3DMode p_scaling_3d_mode) = 0;
 	virtual void viewport_set_scaling_3d_scale(RID p_viewport, float p_scaling_3d_scale) = 0;
@@ -1258,7 +1264,7 @@ public:
 	};
 
 	virtual void environment_set_tonemap(RID p_env, EnvironmentToneMapper p_tone_mapper, float p_exposure, float p_white) = 0;
-	virtual void environment_set_tonemap_range(RID p_env, float p_min_value, float p_max_value) = 0;
+	virtual void environment_set_tonemap_range(RID p_env, ViewportHDRTonemapMode p_mode, float p_min_value, float p_max_value) = 0;
 	virtual void environment_set_adjustment(RID p_env, bool p_enable, float p_brightness, float p_contrast, float p_saturation, bool p_use_1d_color_correction, RID p_color_correction) = 0;
 
 	virtual void environment_set_ssr(RID p_env, bool p_enable, int p_max_steps, float p_fade_in, float p_fade_out, float p_depth_tolerance) = 0;
@@ -1923,6 +1929,7 @@ VARIANT_ENUM_CAST(RenderingServer::ParticlesCollisionType);
 VARIANT_ENUM_CAST(RenderingServer::ParticlesCollisionHeightfieldResolution);
 VARIANT_ENUM_CAST(RenderingServer::FogVolumeShape);
 VARIANT_ENUM_CAST(RenderingServer::ViewportScaling3DMode);
+VARIANT_ENUM_CAST(RenderingServer::ViewportHDRTonemapMode);
 VARIANT_ENUM_CAST(RenderingServer::ViewportUpdateMode);
 VARIANT_ENUM_CAST(RenderingServer::ViewportClearMode);
 VARIANT_ENUM_CAST(RenderingServer::ViewportEnvironmentMode);

@@ -1266,10 +1266,11 @@ public:
 
 	// Tonemap
 	PASS4(environment_set_tonemap, RID, RS::EnvironmentToneMapper, float, float)
-	PASS3(environment_set_tonemap_range, RID, float, float)
+	PASS4(environment_set_tonemap_range, RID, RS::ViewportHDRTonemapMode, float, float)
 	PASS1RC(RS::EnvironmentToneMapper, environment_get_tone_mapper, RID)
 	PASS1RC(float, environment_get_exposure, RID)
 	PASS1RC(float, environment_get_white, RID)
+	PASS1RC(RS::ViewportHDRTonemapMode, environment_get_hdr_tonemap_mode, RID)
 	PASS1RC(float, environment_get_min_value, RID)
 	PASS1RC(float, environment_get_max_value, RID)
 

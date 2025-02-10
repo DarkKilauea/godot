@@ -501,7 +501,8 @@ void RendererSceneRenderRD::_render_buffers_post_process_and_tonemap(const Rende
 
 	float auto_exposure_scale = 1.0;
 
-	if (can_use_effects && RSG::camera_attributes->camera_attributes_uses_auto_exposure(p_render_data->camera_attributes)) {
+	if (can_use_effects &&
+			(RSG::camera_attributes->camera_attributes_uses_auto_exposure(p_render_data->camera_attributes) || environment_get_hdr_tonemap_mode(p_render_data->environment) == RS::VIEWPORT_HDR_TONEMAP_MODE_SQUISH_EXPAND)) {
 		RENDER_TIMESTAMP("Auto exposure");
 
 		RD::get_singleton()->draw_command_begin_label("Auto exposure");
@@ -589,6 +590,8 @@ void RendererSceneRenderRD::_render_buffers_post_process_and_tonemap(const Rende
 		if (can_use_effects && RSG::camera_attributes->camera_attributes_uses_auto_exposure(p_render_data->camera_attributes) && tonemap.exposure_texture.is_valid()) {
 			tonemap.use_auto_exposure = true;
 			tonemap.auto_exposure_scale = auto_exposure_scale;
+		} else if (can_use_effects && environment_get_hdr_tonemap_mode(p_render_data->environment) == RS::VIEWPORT_HDR_TONEMAP_MODE_SQUISH_EXPAND) {
+			// SKIP
 		} else {
 			tonemap.exposure_texture = texture_storage->texture_rd_get_default(RendererRD::TextureStorage::DEFAULT_RD_TEXTURE_WHITE);
 		}
@@ -630,8 +633,10 @@ void RendererSceneRenderRD::_render_buffers_post_process_and_tonemap(const Rende
 			tonemap.tonemap_mode = environment_get_tone_mapper(p_render_data->environment);
 			tonemap.white = environment_get_white(p_render_data->environment);
 			tonemap.exposure = environment_get_exposure(p_render_data->environment);
-			tonemap.min_value = environment_get_min_value(p_render_data->environment);
-			tonemap.max_value = environment_get_max_value(p_render_data->environment);
+
+			tonemap.display_min_value = environment_get_min_value(p_render_data->environment);
+			tonemap.display_max_value = environment_get_max_value(p_render_data->environment);
+			tonemap.hdr_tonemap_mode = environment_get_hdr_tonemap_mode(p_render_data->environment);
 		}
 
 		tonemap.use_color_correction = false;
@@ -726,8 +731,10 @@ void RendererSceneRenderRD::_post_process_subpass(RID p_source_texture, RID p_fr
 		tonemap.tonemap_mode = environment_get_tone_mapper(p_render_data->environment);
 		tonemap.exposure = environment_get_exposure(p_render_data->environment);
 		tonemap.white = environment_get_white(p_render_data->environment);
-		tonemap.min_value = environment_get_min_value(p_render_data->environment);
-		tonemap.max_value = environment_get_max_value(p_render_data->environment);
+
+		tonemap.display_min_value = environment_get_min_value(p_render_data->environment);
+		tonemap.display_max_value = environment_get_max_value(p_render_data->environment);
+		tonemap.hdr_tonemap_mode = environment_get_hdr_tonemap_mode(p_render_data->environment);
 	}
 
 	// We don't support glow or auto exposure here, if they are needed, don't use subpasses!

@@ -2875,6 +2875,9 @@ void Node3DEditorViewport::_project_settings_changed() {
 	const bool use_hdr_2d = GLOBAL_GET("rendering/viewport/hdr_2d");
 	viewport->set_use_hdr_2d(use_hdr_2d);
 
+	const Viewport::HDRTonemapMode hdr_tonemap_mode = Viewport::HDRTonemapMode(int(GLOBAL_GET("rendering/viewport/hdr_tonemap_mode")));
+	viewport->set_tonemap_to_window(hdr_tonemap_mode);
+
 	const bool use_debanding = GLOBAL_GET("rendering/anti_aliasing/quality/use_debanding");
 	viewport->set_use_debanding(use_debanding);
 
@@ -5516,7 +5519,6 @@ Node3DEditorViewport::Node3DEditorViewport(Node3DEditor *p_spatial_editor, int p
 	c->set_anchors_and_offsets_preset(Control::PRESET_FULL_RECT);
 	viewport = memnew(SubViewport);
 	viewport->set_disable_input(true);
-	viewport->set_tonemap_to_window(true);
 
 	c->add_child(viewport);
 	surface = memnew(Control);

@@ -87,7 +87,7 @@ public:
 		DisplayServer::WindowID viewport_to_screen;
 		Rect2 viewport_to_screen_rect;
 		bool viewport_render_direct_to_screen;
-		bool tonemap_to_screen;
+		RS::ViewportHDRTonemapMode tonemap_to_screen = RS::VIEWPORT_HDR_TONEMAP_MODE_NONE;
 
 		bool disable_2d = false;
 		RS::ViewportEnvironmentMode disable_environment = RS::VIEWPORT_ENVIRONMENT_INHERIT;
@@ -228,7 +228,9 @@ public:
 
 	void viewport_attach_to_screen(RID p_viewport, const Rect2 &p_rect = Rect2(), DisplayServer::WindowID p_screen = DisplayServer::MAIN_WINDOW_ID);
 	void viewport_set_render_direct_to_screen(RID p_viewport, bool p_enable);
-	void viewport_set_tonemap_to_screen(RID p_viewport, bool p_enable);
+
+	void viewport_set_tonemap_to_screen(RID p_viewport, RS::ViewportHDRTonemapMode p_mode);
+	RS::ViewportHDRTonemapMode viewport_get_tonemap_to_screen(RID p_viewport) const;
 
 	void viewport_set_active(RID p_viewport, bool p_active);
 	void viewport_set_parent_viewport(RID p_viewport, RID p_parent_viewport);
