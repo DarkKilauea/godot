@@ -144,6 +144,11 @@ public:
 		bool extend_to_title = false;
 		bool hide_from_capture = false;
 
+		// HDR
+		bool hdr_output_requested = false;
+		float hdr_output_reference_luminance = -1.0f;
+		float hdr_output_max_luminance = -1.0f;
+
 		Rect2i parent_safe_rect;
 	};
 
@@ -246,6 +251,17 @@ private:
 	};
 	HashMap<OS::ProcessID, EmbeddedProcessData> embedded_processes;
 	void _window_update_display_id(WindowData *p_wd);
+
+	struct ScreenHdrData {
+		bool hdr_supported = false;
+		float max_luminance = 0.0f;
+		float reference_luminance = 0.0f;
+	};
+	ScreenHdrData _get_screen_hdr_data(int p_screen) const;
+	void _update_hdr_output_for_window(WindowID p_window, const WindowData &p_window_data, ScreenHdrData p_screen_data);
+
+	uint64_t last_hdr_update_time = 0;
+	void _update_hdr_output_for_tracked_windows(bool force);
 
 public:
 	void menu_callback(id p_sender);
@@ -412,6 +428,24 @@ public:
 
 	virtual void window_set_vsync_mode(DisplayServer::VSyncMode p_vsync_mode, WindowID p_window = MAIN_WINDOW_ID) override;
 	virtual DisplayServer::VSyncMode window_get_vsync_mode(WindowID p_vsync_mode) const override;
+
+	void update_screen_parameters();
+
+	virtual bool window_is_hdr_output_supported(WindowID p_window = MAIN_WINDOW_ID) const override;
+
+	virtual void window_request_hdr_output(const bool p_enable, WindowID p_window = MAIN_WINDOW_ID) override;
+	virtual bool window_is_hdr_output_requested(WindowID p_window = MAIN_WINDOW_ID) const override;
+	virtual bool window_is_hdr_output_enabled(WindowID p_window = MAIN_WINDOW_ID) const override;
+
+	virtual void window_set_hdr_output_reference_luminance(const float p_reference_luminance, WindowID p_window = MAIN_WINDOW_ID) override;
+	virtual float window_get_hdr_output_reference_luminance(WindowID p_window = MAIN_WINDOW_ID) const override;
+	virtual float window_get_hdr_output_current_reference_luminance(WindowID p_window = MAIN_WINDOW_ID) const override;
+
+	virtual void window_set_hdr_output_max_luminance(const float p_max_luminance, WindowID p_window = MAIN_WINDOW_ID) override;
+	virtual float window_get_hdr_output_max_luminance(WindowID p_window = MAIN_WINDOW_ID) const override;
+	virtual float window_get_hdr_output_current_max_luminance(WindowID p_window = MAIN_WINDOW_ID) const override;
+
+	virtual float window_get_output_max_linear_value(WindowID p_window = MAIN_WINDOW_ID) const override;
 
 	virtual bool window_maximize_on_title_dbl_click() const override;
 	virtual bool window_minimize_on_title_dbl_click() const override;

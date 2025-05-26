@@ -127,8 +127,9 @@ public:
 				device(p_device) {}
 		virtual ~Surface() = default;
 
-		MTLPixelFormat get_pixel_format() const { return MTLPixelFormatBGRA8Unorm; }
-		virtual Error resize(uint32_t p_desired_framebuffer_count) = 0;
+		virtual void set_hdr_output_enabled(bool p_enabled) = 0;
+		virtual bool is_hdr_output_enabled() const = 0;
+		virtual Error resize(uint32_t p_desired_framebuffer_count, RDD::DataFormat &r_format, RDD::ColorSpace &r_color_space) = 0;
 		virtual RDD::FramebufferID acquire_next_frame_buffer() = 0;
 		virtual void present(MDCommandBuffer *p_cmd_buffer) = 0;
 		void set_max_fps(int p_max_fps) { present_minimum_duration = p_max_fps ? 1.0 / p_max_fps : 0.0; }

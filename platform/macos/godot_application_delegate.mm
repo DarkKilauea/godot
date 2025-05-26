@@ -68,6 +68,7 @@
 
 	[[NSDistributedNotificationCenter defaultCenter] addObserver:self selector:@selector(system_theme_changed:) name:@"AppleInterfaceThemeChangedNotification" object:nil];
 	[[NSDistributedNotificationCenter defaultCenter] addObserver:self selector:@selector(system_theme_changed:) name:@"AppleColorPreferencesChangedNotification" object:nil];
+	[[NSDistributedNotificationCenter defaultCenter] addObserver:self selector:@selector(screen_parameters_changed:) name:NSApplicationDidChangeScreenParametersNotification object:nil];
 
 	return self;
 }
@@ -136,6 +137,13 @@
 	}
 }
 
+- (void)screen_parameters_changed:(NSNotification *)notification {
+	DisplayServerMacOS *ds = Object::cast_to<DisplayServerMacOS>(DisplayServer::get_singleton());
+	if (ds) {
+		ds->update_screen_parameters();
+	}
+}
+
 - (void)applicationDidFinishLaunching:(NSNotification *)notification {
 	os_mac->start_main();
 }
@@ -143,6 +151,7 @@
 static const char *godot_ac_ctx = "gd_accessibility_observer_ctx";
 
 - (void)dealloc {
+	[[NSDistributedNotificationCenter defaultCenter] removeObserver:self name:NSApplicationDidChangeScreenParametersNotification object:nil];
 	[[NSDistributedNotificationCenter defaultCenter] removeObserver:self name:@"AppleInterfaceThemeChangedNotification" object:nil];
 	[[NSDistributedNotificationCenter defaultCenter] removeObserver:self name:@"AppleColorPreferencesChangedNotification" object:nil];
 	[[NSWorkspace sharedWorkspace] removeObserver:self forKeyPath:@"voiceOverEnabled" context:(void *)godot_ac_ctx];

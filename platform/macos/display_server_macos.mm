@@ -836,6 +836,7 @@ bool DisplayServerMacOS::has_feature(Feature p_feature) const {
 		case FEATURE_SCREEN_EXCLUDE_FROM_CAPTURE:
 		case FEATURE_EMOJI_AND_SYMBOL_PICKER:
 		case FEATURE_WINDOW_EMBEDDING:
+		case FEATURE_HDR_OUTPUT:
 			return true;
 #ifdef ACCESSKIT_ENABLED
 		case FEATURE_ACCESSIBILITY_SCREEN_READER: {
@@ -2048,6 +2049,13 @@ void DisplayServerMacOS::reparent_check(WindowID p_window) {
 
 	_window_update_display_id(&wd);
 
+	// Update HDR output if the window has moved to a different screen
+	if (wd.hdr_output_requested) {
+		int current_screen = window_get_current_screen(p_window);
+		ScreenHdrData data = _get_screen_hdr_data(current_screen);
+		_update_hdr_output_for_window(p_window, wd, data);
+	}
+
 	if (wd.transient_parent != INVALID_WINDOW_ID) {
 		WindowData &wd_parent = windows[wd.transient_parent];
 		NSScreen *parent_screen = [wd_parent.window_object screen];
@@ -2951,6 +2959,256 @@ DisplayServer::VSyncMode DisplayServerMacOS::window_get_vsync_mode(WindowID p_wi
 	}
 #endif
 	return DisplayServer::VSYNC_ENABLED;
+}
+
+// Get screen HDR capabilities for internal use only.
+// Do not report values from this method to the user.
+DisplayServerMacOS::ScreenHdrData DisplayServerMacOS::_get_screen_hdr_data(int p_screen) const {
+	ScreenHdrData data;
+
+	p_screen = _get_screen_index(p_screen);
+	int screen_count = get_screen_count();
+	if (p_screen < 0 || p_screen >= screen_count) {
+		return data;
+	}
+
+	NSArray<NSScreen *> *screens = [NSScreen screens];
+	if ((NSUInteger)p_screen >= screens.count) {
+		return data;
+	}
+
+	NSScreen *screen = screens[p_screen];
+
+	// Check if the screen supports HDR by checking if it has extended dynamic range capability
+	data.hdr_supported = screen.maximumPotentialExtendedDynamicRangeColorComponentValue > 1.0f;
+
+	// Get the maximum luminance value from the screen's extended dynamic range capabilities.
+	float maximum_value = screen.maximumReferenceExtendedDynamicRangeColorComponentValue;
+	if (maximum_value <= 0.0f) {
+		maximum_value = screen.maximumExtendedDynamicRangeColorComponentValue;
+	}
+
+	data.reference_luminance = 100.0f;
+	data.max_luminance = maximum_value * 100.0f;
+
+	return data;
+}
+
+void DisplayServerMacOS::_update_hdr_output_for_window(WindowID p_window, const WindowData &p_window_data, ScreenHdrData p_screen_data) {
+#if defined(RD_ENABLED)
+	if (rendering_context) {
+		bool current_hdr_enabled = rendering_context->window_get_hdr_output_enabled(p_window);
+		bool desired_hdr_enabled = p_window_data.hdr_output_requested && p_screen_data.hdr_supported;
+
+		if (current_hdr_enabled != desired_hdr_enabled) {
+			rendering_context->window_set_hdr_output_enabled(p_window, desired_hdr_enabled);
+			rendering_context->window_set_hdr_output_linear_luminance_scale(p_window, p_screen_data.reference_luminance);
+		}
+
+		// If auto reference luminance is enabled, update it based on the current SDR white level.
+		if (p_window_data.hdr_output_reference_luminance < 0.0f) {
+			if (p_screen_data.reference_luminance > 0.0f) {
+				rendering_context->window_set_hdr_output_reference_luminance(p_window, p_screen_data.reference_luminance);
+			}
+			// If we cannot get the reference luminance, leave the previous value unchanged.
+		}
+
+		// If auto max luminance is enabled, update it based on the screen's max luminance.
+		if (p_window_data.hdr_output_max_luminance < 0.0f) {
+			if (p_screen_data.max_luminance > 0.0f) {
+				rendering_context->window_set_hdr_output_max_luminance(p_window, p_screen_data.max_luminance);
+			}
+			// If we cannot get the screen's max luminance, leave the previous value unchanged.
+		}
+	}
+#endif // RD_ENABLED
+}
+
+void DisplayServerMacOS::update_screen_parameters() {
+	_update_hdr_output_for_tracked_windows(true);
+}
+
+bool DisplayServerMacOS::window_is_hdr_output_supported(WindowID p_window) const {
+	_THREAD_SAFE_METHOD_
+
+#if defined(RD_ENABLED)
+	if (rendering_device && !rendering_device->has_feature(RenderingDevice::Features::SUPPORTS_HDR_OUTPUT)) {
+		return false; // HDR output is not supported by the rendering device.
+	}
+#endif
+
+	// The window supports HDR if the screen it is on supports HDR.
+	int screen = window_get_current_screen(p_window);
+	ScreenHdrData data = _get_screen_hdr_data(screen);
+	return data.hdr_supported;
+}
+
+void DisplayServerMacOS::window_request_hdr_output(const bool p_enable, WindowID p_window) {
+	_THREAD_SAFE_METHOD_
+
+#if defined(RD_ENABLED)
+	ERR_FAIL_COND_EDMSG(p_enable && (rendering_device && rendering_device->has_feature(RenderingDevice::Features::SUPPORTS_HDR_OUTPUT)) == false, "HDR output is not supported by the rendering device.");
+#endif
+
+	ERR_FAIL_COND(!windows.has(p_window));
+	WindowData &wd = windows[p_window];
+	wd.hdr_output_requested = p_enable;
+
+	int screen = window_get_current_screen(p_window);
+	ScreenHdrData data = _get_screen_hdr_data(screen);
+	_update_hdr_output_for_window(p_window, wd, data);
+}
+
+bool DisplayServerMacOS::window_is_hdr_output_requested(WindowID p_window) const {
+	_THREAD_SAFE_METHOD_
+
+	ERR_FAIL_COND_V(!windows.has(p_window), false);
+	const WindowData &wd = windows[p_window];
+	return wd.hdr_output_requested;
+}
+
+bool DisplayServerMacOS::window_is_hdr_output_enabled(WindowID p_window) const {
+	_THREAD_SAFE_METHOD_
+
+#if defined(RD_ENABLED)
+	if (rendering_context) {
+		return rendering_context->window_get_hdr_output_enabled(p_window);
+	}
+#endif
+
+	return false;
+}
+
+void DisplayServerMacOS::window_set_hdr_output_reference_luminance(const float p_reference_luminance, WindowID p_window) {
+	_THREAD_SAFE_METHOD_
+
+	ERR_FAIL_COND(!windows.has(p_window));
+	WindowData &wd = windows[p_window];
+
+	if (Math::is_equal_approx(wd.hdr_output_reference_luminance, p_reference_luminance)) {
+		return;
+	}
+
+	wd.hdr_output_reference_luminance = p_reference_luminance;
+
+	// Negative luminance means auto-adjust
+	if (wd.hdr_output_reference_luminance < 0.0f) {
+		int screen = window_get_current_screen(p_window);
+		ScreenHdrData data = _get_screen_hdr_data(screen);
+		_update_hdr_output_for_window(p_window, wd, data);
+	} else {
+		// Otherwise, apply the requested luminance
+#if defined(RD_ENABLED)
+		if (rendering_context) {
+			rendering_context->window_set_hdr_output_reference_luminance(p_window, p_reference_luminance);
+		}
+#endif
+	}
+}
+
+float DisplayServerMacOS::window_get_hdr_output_reference_luminance(WindowID p_window) const {
+	_THREAD_SAFE_METHOD_
+
+	ERR_FAIL_COND_V(!windows.has(p_window), 0.0f);
+	const WindowData &wd = windows[p_window];
+	return wd.hdr_output_reference_luminance;
+}
+
+float DisplayServerMacOS::window_get_hdr_output_current_reference_luminance(WindowID p_window) const {
+	_THREAD_SAFE_METHOD_
+
+#if defined(RD_ENABLED)
+	if (rendering_context) {
+		return rendering_context->window_get_hdr_output_reference_luminance(p_window);
+	}
+#endif
+
+	return 0.0f;
+}
+
+void DisplayServerMacOS::window_set_hdr_output_max_luminance(const float p_max_luminance, WindowID p_window) {
+	_THREAD_SAFE_METHOD_
+
+	ERR_FAIL_COND(!windows.has(p_window));
+	WindowData &wd = windows[p_window];
+
+	if (Math::is_equal_approx(wd.hdr_output_max_luminance, p_max_luminance)) {
+		return;
+	}
+
+	wd.hdr_output_max_luminance = p_max_luminance;
+
+	// Negative luminance means auto-adjust
+	if (wd.hdr_output_max_luminance < 0.0f) {
+		int screen = window_get_current_screen(p_window);
+		ScreenHdrData data = _get_screen_hdr_data(screen);
+		_update_hdr_output_for_window(p_window, wd, data);
+	} else {
+		// Otherwise, apply the requested luminance
+#if defined(RD_ENABLED)
+		if (rendering_context) {
+			rendering_context->window_set_hdr_output_max_luminance(p_window, p_max_luminance);
+		}
+#endif
+	}
+}
+
+float DisplayServerMacOS::window_get_hdr_output_max_luminance(WindowID p_window) const {
+	_THREAD_SAFE_METHOD_
+
+	ERR_FAIL_COND_V(!windows.has(p_window), 0.0f);
+	const WindowData &wd = windows[p_window];
+	return wd.hdr_output_max_luminance;
+}
+
+float DisplayServerMacOS::window_get_hdr_output_current_max_luminance(WindowID p_window) const {
+	_THREAD_SAFE_METHOD_
+
+#if defined(RD_ENABLED)
+	if (rendering_context) {
+		return rendering_context->window_get_hdr_output_max_luminance(p_window);
+	}
+#endif
+
+	return 0.0f;
+}
+
+float DisplayServerMacOS::window_get_output_max_linear_value(WindowID p_window) const {
+	_THREAD_SAFE_METHOD_
+
+#if defined(RD_ENABLED)
+	if (rendering_context) {
+		return rendering_context->window_get_output_max_linear_value(p_window);
+	}
+#endif
+
+	return 1.0f; // SDR
+}
+
+void DisplayServerMacOS::_update_hdr_output_for_tracked_windows(bool force) {
+	// Only update every so often to avoid excessive polling, unless we are asked to update now.
+	uint64_t current_time = OS::get_singleton()->get_ticks_msec();
+	if (!force && current_time - last_hdr_update_time < 500) {
+		return;
+	}
+	last_hdr_update_time = current_time;
+
+	HashMap<int, ScreenHdrData> outputs;
+	for (const KeyValue<WindowID, WindowData> &E : windows) {
+		if (E.value.hdr_output_requested) {
+			int screen = window_get_current_screen(E.key);
+
+			ScreenHdrData data;
+			if (!outputs.has(screen)) {
+				data = _get_screen_hdr_data(screen);
+				outputs.insert(screen, data);
+			} else {
+				data = outputs[screen];
+			}
+
+			_update_hdr_output_for_window(E.key, E.value, data);
+		}
+	}
 }
 
 int DisplayServerMacOS::accessibility_should_increase_contrast() const {
