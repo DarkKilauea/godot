@@ -88,6 +88,7 @@ GodotJavaWrapper::GodotJavaWrapper(JNIEnv *p_env, jobject p_godot_instance) {
 	_set_window_color = p_env->GetMethodID(godot_class, "setWindowColor", "(Ljava/lang/String;)V");
 	_on_editor_workspace_selected = p_env->GetMethodID(godot_class, "nativeOnEditorWorkspaceSelected", "(Ljava/lang/String;)V");
 	_get_activity = p_env->GetMethodID(godot_class, "getActivity", "()Landroid/app/Activity;");
+	_get_hdr_capabilities = p_env->GetMethodID(godot_class, "getHdrCapabilities", "()[F");
 }
 
 GodotJavaWrapper::~GodotJavaWrapper() {
@@ -606,4 +607,24 @@ void GodotJavaWrapper::on_editor_workspace_selected(const String &p_workspace) {
 		jstring j_workspace = env->NewStringUTF(p_workspace.utf8().get_data());
 		env->CallVoidMethod(godot_instance, _on_editor_workspace_selected, j_workspace);
 	}
+}
+
+AndroidHdrCapabilities GodotJavaWrapper::getHdrCapabilities() {
+	AndroidHdrCapabilities result = {};
+
+	ERR_FAIL_NULL_V(_get_hdr_capabilities, result);
+	JNIEnv *env = get_jni_env();
+	ERR_FAIL_NULL_V(env, result);
+	jfloatArray returnArray = (jfloatArray)env->CallObjectMethod(godot_instance, _get_hdr_capabilities);
+	ERR_FAIL_COND_V(env->GetArrayLength(returnArray) != 5, result);
+	jfloat *arrayBody = env->GetFloatArrayElements(returnArray, JNI_FALSE);
+
+	result.hdr_supported = arrayBody[0] > 0.0f;
+	result.min_luminance = arrayBody[1];
+	result.max_luminance = arrayBody[2];
+	result.max_average_luminance = arrayBody[3];
+	result.hdr_sdr_ratio = arrayBody[4];
+
+	env->ReleaseFloatArrayElements(returnArray, arrayBody, 0);
+	return result;
 }
