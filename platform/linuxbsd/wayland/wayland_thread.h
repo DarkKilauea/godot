@@ -102,11 +102,6 @@ public:
 		float target_min_luminance = 0;
 		float target_max_luminance = 0;
 		float reference_luminance = 0;
-
-		// The luminances the developer requested.
-		// We never pass these to compositor and are just for convenience.
-		float requested_max_luminance = 0;
-		float requested_reference_luminance = 0;
 	};
 
 	// Messages used for exchanging information between Godot's and Wayland's thread.

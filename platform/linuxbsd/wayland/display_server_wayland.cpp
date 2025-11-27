@@ -1522,14 +1522,12 @@ bool DisplayServerWayland::window_is_hdr_output_enabled(WindowID p_window_id) co
 
 void DisplayServerWayland::window_set_hdr_output_reference_luminance(const float p_reference_luminance, WindowID p_window_id) {
 	ERR_FAIL_COND(!windows.has(p_window_id));
-	WindowData &wd = windows[p_window_id];
-	wd.color_profile.requested_reference_luminance = p_reference_luminance;
+	ERR_FAIL_COND_MSG(p_reference_luminance >= 0.0f, "Wayland does not support setting the reference luminance.");
 }
 
 float DisplayServerWayland::window_get_hdr_output_reference_luminance(WindowID p_window_id) const {
 	ERR_FAIL_COND_V(!windows.has(p_window_id), 0.0f);
-	const WindowData &wd = windows[p_window_id];
-	return wd.color_profile.requested_reference_luminance;
+	return -1;
 }
 
 float DisplayServerWayland::window_get_hdr_output_current_reference_luminance(WindowID p_window_id) const {
@@ -1543,14 +1541,12 @@ float DisplayServerWayland::window_get_hdr_output_current_reference_luminance(Wi
 
 void DisplayServerWayland::window_set_hdr_output_max_luminance(const float p_max_luminance, WindowID p_window_id) {
 	ERR_FAIL_COND(!windows.has(p_window_id));
-	WindowData &wd = windows[p_window_id];
-	wd.color_profile.requested_max_luminance = p_max_luminance;
+	ERR_FAIL_COND_MSG(p_max_luminance >= 0.0f, "Wayland does not support setting the max luminance.");
 }
 
 float DisplayServerWayland::window_get_hdr_output_max_luminance(WindowID p_window_id) const {
 	ERR_FAIL_COND_V(!windows.has(p_window_id), 0.0f);
-	const WindowData &wd = windows[p_window_id];
-	return wd.color_profile.requested_max_luminance;
+	return -1;
 }
 
 float DisplayServerWayland::window_get_hdr_output_current_max_luminance(WindowID p_window_id) const {
@@ -1565,11 +1561,11 @@ float DisplayServerWayland::window_get_hdr_output_current_max_luminance(WindowID
 float DisplayServerWayland::window_get_output_max_linear_value(WindowID p_window_id) const {
 #if defined(RD_ENABLED)
 	if (rendering_context) {
-		return rendering_context->window_get_hdr_output_max_luminance(p_window_id);
+		return rendering_context->window_get_output_max_linear_value(p_window_id);
 	}
 #endif
 
-	return 0.0f;
+	return 1.0f;
 }
 
 void DisplayServerWayland::cursor_set_shape(CursorShape p_shape) {
