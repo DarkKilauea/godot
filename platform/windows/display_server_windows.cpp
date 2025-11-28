@@ -1590,6 +1590,22 @@ static bool _get_monitor_desc(HMONITOR p_monitor, DXGI_OUTPUT_DESC1 &r_Desc) {
 }
 #endif // D3D12_ENABLED
 
+// Report only new errors from fetching SDR white level.
+// This is to avoid spamming the log with the same error for each screen.
+static HashSet<Vector3i> displays_with_white_level_error;
+#define ERR_WHITE_LEVEL_CONTINUE_MSG_LATCHED(m_cond, m_msg, m_key)                                                            \
+	if (unlikely(m_cond)) {                                                                                                   \
+		if (displays_with_white_level_error.has(m_key)) {                                                                     \
+			continue;                                                                                                         \
+		} else {                                                                                                              \
+			displays_with_white_level_error.insert(m_key);                                                                    \
+			_err_print_error(FUNCTION_STR, __FILE__, __LINE__, "Condition \"" _STR(m_cond) "\" is true. Continuing.", m_msg); \
+			continue;                                                                                                         \
+		}                                                                                                                     \
+	} else {                                                                                                                  \
+		displays_with_white_level_error.erase(m_key);                                                                         \
+	}
+
 static BOOL CALLBACK _MonitorEnumProcSdrWhiteLevel(HMONITOR hMonitor, HDC hdcMonitor, LPRECT lprcMonitor, LPARAM dwData) {
 	EnumSdrWhiteLevelData *data = (EnumSdrWhiteLevelData *)dwData;
 
@@ -1608,6 +1624,8 @@ static BOOL CALLBACK _MonitorEnumProcSdrWhiteLevel(HMONITOR hMonitor, HDC hdcMon
 
 	// Find this screen's path.
 	for (const DISPLAYCONFIG_PATH_INFO &path : data->paths) {
+		const Vector3i key = Vector3i(path.sourceInfo.adapterId.HighPart, path.sourceInfo.adapterId.LowPart, path.sourceInfo.id);
+
 		DISPLAYCONFIG_SOURCE_DEVICE_NAME source_name;
 		memset(&source_name, 0, sizeof(source_name));
 		source_name.header.type = DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME;
@@ -1615,10 +1633,10 @@ static BOOL CALLBACK _MonitorEnumProcSdrWhiteLevel(HMONITOR hMonitor, HDC hdcMon
 		source_name.header.adapterId = path.sourceInfo.adapterId;
 		source_name.header.id = path.sourceInfo.id;
 
-		if (DisplayConfigGetDeviceInfo(&source_name.header) != ERROR_SUCCESS) {
-			ERR_PRINT(vformat("Failed to get source name for screen: %d, adapterId: 0x%08X%08X, id: %d", data->screen, (uint32_t)path.sourceInfo.adapterId.HighPart, (uint32_t)path.sourceInfo.adapterId.LowPart, path.sourceInfo.id));
-			continue;
-		}
+		ERR_WHITE_LEVEL_CONTINUE_MSG_LATCHED(
+				DisplayConfigGetDeviceInfo(&source_name.header) != ERROR_SUCCESS,
+				vformat("Failed to get source name for screen: %d, adapterId: 0x%08X%08X, id: %d", data->screen, (uint32_t)path.sourceInfo.adapterId.HighPart, (uint32_t)path.sourceInfo.adapterId.LowPart, path.sourceInfo.id),
+				key);
 
 		if (wcscmp(minfo.szDevice, source_name.viewGdiDeviceName) != 0) {
 			continue;
@@ -1632,10 +1650,9 @@ static BOOL CALLBACK _MonitorEnumProcSdrWhiteLevel(HMONITOR hMonitor, HDC hdcMon
 		sdr_white_level.header.adapterId = path.targetInfo.adapterId;
 		sdr_white_level.header.id = path.targetInfo.id;
 
-		if (DisplayConfigGetDeviceInfo(&sdr_white_level.header) != ERROR_SUCCESS) {
-			ERR_PRINT(vformat("Failed to get SDR white level for screen: %d, adapterId: 0x%08X%08X, id: %d", data->screen, (uint32_t)path.targetInfo.adapterId.HighPart, (uint32_t)path.targetInfo.adapterId.LowPart, path.targetInfo.id));
-			continue;
-		}
+		ERR_WHITE_LEVEL_CONTINUE_MSG_LATCHED(DisplayConfigGetDeviceInfo(&sdr_white_level.header) != ERROR_SUCCESS,
+				vformat("Failed to get SDR white level for screen: %d, adapterId: 0x%08X%08X, id: %d", data->screen, (uint32_t)path.targetInfo.adapterId.HighPart, (uint32_t)path.targetInfo.adapterId.LowPart, path.targetInfo.id),
+				key);
 
 		data->sdrWhiteLevelInNits = (float)sdr_white_level.SDRWhiteLevel / 1000.0f * 80.0f;
 	}
