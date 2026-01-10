@@ -88,6 +88,10 @@ public:
 	Size2 get_margins_top_left();
 	void grab_window_focus();
 
+	void set_hdr_output_requested(bool p_enabled);
+	bool is_hdr_output_enabled() const;
+	bool is_hdr_output_requested() const;
+
 	void set_override_close_request(bool p_enabled);
 
 	WindowWrapper();

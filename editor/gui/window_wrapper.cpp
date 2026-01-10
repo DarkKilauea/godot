@@ -357,6 +357,28 @@ void WindowWrapper::grab_window_focus() {
 	}
 }
 
+void WindowWrapper::set_hdr_output_requested(bool p_enabled) {
+	if (window) {
+		window->set_hdr_output_requested(p_enabled);
+	}
+}
+
+bool WindowWrapper::is_hdr_output_enabled() const {
+	if (window) {
+		return DisplayServer::get_singleton()->window_is_hdr_output_enabled(window->get_window_id());
+	}
+
+	return false;
+}
+
+bool WindowWrapper::is_hdr_output_requested() const {
+	if (window) {
+		return window->is_hdr_output_requested();
+	}
+
+	return false;
+}
+
 void WindowWrapper::set_override_close_request(bool p_enabled) {
 	override_close_request = p_enabled;
 }

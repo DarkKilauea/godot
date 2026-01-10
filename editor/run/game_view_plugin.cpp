@@ -860,6 +860,21 @@ void GameView::_hide_selection_toggled(bool p_pressed) {
 	EditorSettings::get_singleton()->set_project_metadata("game_view", "hide_selection", p_pressed);
 }
 
+void GameView::_hdr_output_override_button_pressed() {
+	if (window_wrapper) {
+		window_wrapper->set_hdr_output_requested(!window_wrapper->is_hdr_output_requested());
+		_update_hdr_output_button();
+	}
+}
+
+void GameView::_update_hdr_output_button() {
+	if (window_wrapper) {
+		bool hdr_enabled = window_wrapper->is_hdr_output_enabled();
+		hdr_output_override_button->set_text(hdr_enabled ? TTRC("HDR") : TTRC("SDR"));
+		hdr_output_override_button->set_tooltip_text(hdr_enabled ? TTRC("HDR output enabled.") : TTRC("SDR output enabled."));
+	}
+}
+
 void GameView::_debug_mute_audio_button_pressed() {
 	debug_mute_audio = !debug_mute_audio;
 	debug_mute_audio_button->set_button_icon(get_editor_theme_icon(debug_mute_audio ? SNAME("AudioMute") : SNAME("AudioStreamPlayer")));
@@ -982,12 +997,17 @@ void GameView::_notification(int p_what) {
 			}
 
 			_update_ui();
+			_update_hdr_output_button();
+			set_process_internal(true);
 		} break;
 		case NOTIFICATION_WM_POSITION_CHANGED: {
 			if (window_wrapper->get_window_enabled()) {
 				_update_floating_window_settings();
 			}
 		} break;
+		case NOTIFICATION_INTERNAL_PROCESS: {
+			_update_hdr_output_button();
+		}
 	}
 }
 
@@ -1349,17 +1369,6 @@ GameView::GameView(Ref<GameViewDebugger> p_debugger, EmbeddedProcessBase *p_embe
 
 	selection_hb->add_child(memnew(VSeparator));
 
-	HBoxContainer *audio_hb = memnew(HBoxContainer);
-	main_menu_fc->add_child(audio_hb);
-
-	debug_mute_audio_button = memnew(Button);
-	audio_hb->add_child(debug_mute_audio_button);
-	debug_mute_audio_button->set_theme_type_variation("FlatButton");
-	debug_mute_audio_button->connect(SceneStringName(pressed), callable_mp(this, &GameView::_debug_mute_audio_button_pressed));
-	debug_mute_audio_button->set_tooltip_text(debug_mute_audio ? TTRC("Unmute game audio.") : TTRC("Mute game audio."));
-
-	audio_hb->add_child(memnew(VSeparator));
-
 	HBoxContainer *camera_hb = memnew(HBoxContainer);
 	main_menu_fc->add_child(camera_hb);
 
@@ -1388,6 +1397,28 @@ GameView::GameView(Ref<GameViewDebugger> p_debugger, EmbeddedProcessBase *p_embe
 	_camera_override_menu_id_pressed(EditorSettings::get_singleton()->get_project_metadata("game_view", "camera_override_mode", 0));
 
 	camera_hb->add_child(memnew(VSeparator));
+
+	HBoxContainer *hdr_hb = memnew(HBoxContainer);
+	main_menu_fc->add_child(hdr_hb);
+
+	hdr_output_override_button = memnew(Button);
+	hdr_hb->add_child(hdr_output_override_button);
+	hdr_output_override_button->set_theme_type_variation(SceneStringName(FlatButton));
+	hdr_output_override_button->connect(SceneStringName(pressed), callable_mp(this, &GameView::_hdr_output_override_button_pressed));
+	hdr_output_override_button->set_tooltip_text(TTRC("Loading..."));
+	hdr_output_override_button->set_text(TTRC("HDR"));
+	hdr_hb->add_child(memnew(VSeparator));
+
+	HBoxContainer *audio_hb = memnew(HBoxContainer);
+	main_menu_fc->add_child(audio_hb);
+
+	debug_mute_audio_button = memnew(Button);
+	audio_hb->add_child(debug_mute_audio_button);
+	debug_mute_audio_button->set_theme_type_variation("FlatButton");
+	debug_mute_audio_button->connect(SceneStringName(pressed), callable_mp(this, &GameView::_debug_mute_audio_button_pressed));
+	debug_mute_audio_button->set_tooltip_text(debug_mute_audio ? TTRC("Unmute game audio.") : TTRC("Mute game audio."));
+
+	audio_hb->add_child(memnew(VSeparator));
 
 	embedding_hb = memnew(HBoxContainer);
 	embedding_hb->set_h_size_flags(Control::SIZE_EXPAND_FILL);

@@ -173,10 +173,12 @@ class GameView : public VBoxContainer {
 	Button *hide_selection = nullptr;
 	MenuButton *selection_options_menu = nullptr;
 
-	Button *debug_mute_audio_button = nullptr;
-
 	Button *camera_override_button = nullptr;
 	MenuButton *camera_override_menu = nullptr;
+
+	Button *hdr_output_override_button = nullptr;
+
+	Button *debug_mute_audio_button = nullptr;
 
 	HBoxContainer *embedding_hb = nullptr;
 	MenuButton *embed_options_menu = nullptr;
@@ -232,6 +234,9 @@ class GameView : public VBoxContainer {
 	void _show_update_window_wrapper();
 
 	void _hide_selection_toggled(bool p_pressed);
+
+	void _hdr_output_override_button_pressed();
+	void _update_hdr_output_button();
 
 	void _debug_mute_audio_button_pressed();
 
