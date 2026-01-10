@@ -49,6 +49,7 @@
 #include "scene/resources/packed_scene.h"
 #include "scene/theme/theme_db.h"
 #include "servers/audio/audio_server.h"
+#include "servers/display/display_server.h"
 
 #ifndef PHYSICS_2D_DISABLED
 #include "scene/2d/physics/collision_object_2d.h"
@@ -220,6 +221,37 @@ Error SceneDebugger::_msg_debug_mute_audio(const Array &p_args) {
 	ERR_FAIL_COND_V(p_args.is_empty(), ERR_INVALID_DATA);
 	bool do_mute = p_args[0];
 	AudioServer::get_singleton()->set_debug_mute(do_mute);
+	return OK;
+}
+
+Error SceneDebugger::_msg_set_hdr_output_requested(const Array &p_args) {
+	ERR_FAIL_COND_V(p_args.is_empty(), ERR_INVALID_DATA);
+	bool requested = p_args[0];
+	Window *root = SceneTree::get_singleton()->get_root();
+	ERR_FAIL_NULL_V(root, ERR_UNAVAILABLE);
+	root->set_hdr_output_requested(requested);
+	return OK;
+}
+
+Error SceneDebugger::_msg_set_hdr_reference_luminance(const Array &p_args) {
+	ERR_FAIL_COND_V(p_args.is_empty(), ERR_INVALID_DATA);
+	float luminance = p_args[0];
+	DisplayServer *ds = DisplayServer::get_singleton();
+	ERR_FAIL_NULL_V(ds, ERR_UNAVAILABLE);
+	Window *root = SceneTree::get_singleton()->get_root();
+	ERR_FAIL_NULL_V(root, ERR_UNAVAILABLE);
+	ds->window_set_hdr_output_reference_luminance(luminance, root->get_window_id());
+	return OK;
+}
+
+Error SceneDebugger::_msg_set_hdr_max_luminance(const Array &p_args) {
+	ERR_FAIL_COND_V(p_args.is_empty(), ERR_INVALID_DATA);
+	float luminance = p_args[0];
+	DisplayServer *ds = DisplayServer::get_singleton();
+	ERR_FAIL_NULL_V(ds, ERR_UNAVAILABLE);
+	Window *root = SceneTree::get_singleton()->get_root();
+	ERR_FAIL_NULL_V(root, ERR_UNAVAILABLE);
+	ds->window_set_hdr_output_max_luminance(luminance, root->get_window_id());
 	return OK;
 }
 
@@ -554,6 +586,9 @@ void SceneDebugger::_init_message_handlers() {
 	message_handlers["next_frame"] = _msg_next_frame;
 	message_handlers["speed_changed"] = _msg_speed_changed;
 	message_handlers["debug_mute_audio"] = _msg_debug_mute_audio;
+	message_handlers["set_hdr_output_requested"] = _msg_set_hdr_output_requested;
+	message_handlers["set_hdr_reference_luminance"] = _msg_set_hdr_reference_luminance;
+	message_handlers["set_hdr_max_luminance"] = _msg_set_hdr_max_luminance;
 	message_handlers["override_cameras"] = _msg_override_cameras;
 	message_handlers["transform_camera_2d"] = _msg_transform_camera_2d;
 #ifndef _3D_DISABLED
