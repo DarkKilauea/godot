@@ -34,6 +34,7 @@
 #include "editor/debugger/editor_debugger_plugin.h"
 #include "editor/editor_main_screen.h"
 #include "editor/plugins/editor_plugin.h"
+#include "editor/run/hdr_options_popup.h"
 #include "scene/debugger/scene_debugger.h"
 #include "scene/gui/box_container.h"
 
@@ -72,6 +73,7 @@ private:
 	HashMap<uint64_t, ScreenshotCB> screenshot_callbacks;
 
 	bool _msg_get_screenshot(const Array &p_args);
+	bool _msg_get_hdr_state(const Array &p_args);
 
 protected:
 	static void _bind_methods();
@@ -98,9 +100,8 @@ public:
 
 	void set_debug_mute_audio(bool p_enabled);
 	
-	void set_hdr_output_requested(bool p_enabled);
-	void set_hdr_reference_luminance(float p_luminance);
-	void set_hdr_max_luminance(float p_luminance);
+	void set_hdr_settings(const Dictionary &p_settings);
+	void request_hdr_state();
 
 	void set_camera_override(bool p_enabled);
 	void set_camera_manipulate_mode(EditorDebuggerNode::CameraOverride p_mode);
@@ -181,20 +182,7 @@ class GameView : public VBoxContainer {
 	MenuButton *camera_override_menu = nullptr;
 
 	Button *hdr_output_override_button = nullptr;
-	PopupPanel *hdr_options_popup = nullptr;
-	Label *hdr_max_color_label = nullptr;
-	CheckBox *hdr_request_checkbox = nullptr;
-	Label *hdr_error_label = nullptr;
-	HBoxContainer *hdr_luminance_container = nullptr;
-	CheckBox *hdr_auto_luminance_checkbox = nullptr;
-	HBoxContainer *hdr_reference_luminance_container = nullptr;
-	Label *hdr_reference_luminance_label = nullptr;
-	HSlider *hdr_reference_luminance_slider = nullptr;
-	SpinBox *hdr_reference_luminance_spinbox = nullptr;
-	HBoxContainer *hdr_max_luminance_container = nullptr;
-	Label *hdr_max_luminance_label = nullptr;
-	HSlider *hdr_max_luminance_slider = nullptr;
-	SpinBox *hdr_max_luminance_spinbox = nullptr;
+	HDROptionsPopup *hdr_options_popup = nullptr;
 
 	Button *debug_mute_audio_button = nullptr;
 
@@ -255,11 +243,9 @@ class GameView : public VBoxContainer {
 
 	void _hdr_output_override_button_pressed();
 	void _update_hdr_output_button();
-	void _update_hdr_popup_content();
-	void _hdr_request_checkbox_toggled(bool p_enabled);
-	void _hdr_auto_luminance_checkbox_toggled(bool p_enabled);
-	void _hdr_reference_luminance_changed(double p_value);
-	void _hdr_max_luminance_changed(double p_value);
+	void _hdr_settings_changed(const Dictionary &p_settings);
+	void _update_hdr_state();
+	void _on_hdr_state_received(const Dictionary &p_state);
 
 	void _debug_mute_audio_button_pressed();
 

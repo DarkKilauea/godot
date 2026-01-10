@@ -224,34 +224,67 @@ Error SceneDebugger::_msg_debug_mute_audio(const Array &p_args) {
 	return OK;
 }
 
-Error SceneDebugger::_msg_set_hdr_output_requested(const Array &p_args) {
+Error SceneDebugger::_msg_set_hdr_settings(const Array &p_args) {
 	ERR_FAIL_COND_V(p_args.is_empty(), ERR_INVALID_DATA);
-	bool requested = p_args[0];
+	Dictionary settings = p_args[0];
+	
 	Window *root = SceneTree::get_singleton()->get_root();
 	ERR_FAIL_NULL_V(root, ERR_UNAVAILABLE);
-	root->set_hdr_output_requested(requested);
+	DisplayServer *ds = DisplayServer::get_singleton();
+	ERR_FAIL_NULL_V(ds, ERR_UNAVAILABLE);
+	
+	// Apply HDR settings
+	if (settings.has("requested")) {
+		root->set_hdr_output_requested(settings["requested"]);
+	}
+	
+	if (settings.has("reference_luminance")) {
+		ds->window_set_hdr_output_reference_luminance(settings["reference_luminance"], root->get_window_id());
+	}
+	
+	if (settings.has("max_luminance")) {
+		ds->window_set_hdr_output_max_luminance(settings["max_luminance"], root->get_window_id());
+	}
+	
 	return OK;
 }
 
-Error SceneDebugger::_msg_set_hdr_reference_luminance(const Array &p_args) {
-	ERR_FAIL_COND_V(p_args.is_empty(), ERR_INVALID_DATA);
-	float luminance = p_args[0];
-	DisplayServer *ds = DisplayServer::get_singleton();
-	ERR_FAIL_NULL_V(ds, ERR_UNAVAILABLE);
+Error SceneDebugger::_msg_request_hdr_state(const Array &p_args) {
 	Window *root = SceneTree::get_singleton()->get_root();
 	ERR_FAIL_NULL_V(root, ERR_UNAVAILABLE);
-	ds->window_set_hdr_output_reference_luminance(luminance, root->get_window_id());
-	return OK;
-}
-
-Error SceneDebugger::_msg_set_hdr_max_luminance(const Array &p_args) {
-	ERR_FAIL_COND_V(p_args.is_empty(), ERR_INVALID_DATA);
-	float luminance = p_args[0];
 	DisplayServer *ds = DisplayServer::get_singleton();
 	ERR_FAIL_NULL_V(ds, ERR_UNAVAILABLE);
-	Window *root = SceneTree::get_singleton()->get_root();
-	ERR_FAIL_NULL_V(root, ERR_UNAVAILABLE);
-	ds->window_set_hdr_output_max_luminance(luminance, root->get_window_id());
+	
+	// Gather current HDR state
+	Dictionary state;
+	state["requested"] = root->is_hdr_output_requested();
+	state["enabled"] = ds->window_is_hdr_output_enabled(root->get_window_id());
+	
+	float ref_luminance = ds->window_get_hdr_output_reference_luminance(root->get_window_id());
+	float max_luminance = ds->window_get_hdr_output_max_luminance(root->get_window_id());
+	state["auto_luminance"] = (ref_luminance < 0 || max_luminance < 0);
+	state["reference_luminance"] = ref_luminance < 0 ? 100.0 : ref_luminance;
+	state["max_luminance"] = max_luminance < 0 ? 1000.0 : max_luminance;
+	state["current_max_luminance"] = ds->window_get_hdr_output_current_max_luminance(root->get_window_id());
+	
+	// Determine error message if HDR requested but not enabled
+	if (state["requested"] && !state["enabled"]) {
+		if (!ds->has_feature(DisplayServer::FEATURE_HDR_OUTPUT)) {
+			state["error_message"] = "Display Server does not support HDR output.";
+		} else if (!ds->window_is_hdr_output_supported(root->get_window_id())) {
+			state["error_message"] = "Window does not support HDR output. Please ensure that your window is positioned on a screen that is currently in HDR mode.";
+		} else {
+			state["error_message"] = "HDR output is not available.";
+		}
+	} else {
+		state["error_message"] = "";
+	}
+	
+	// Send state back to editor
+	Array message;
+	message.append(state);
+	EngineDebugger::get_singleton()->send_message("game_view:hdr_state", message);
+	
 	return OK;
 }
 
@@ -586,9 +619,8 @@ void SceneDebugger::_init_message_handlers() {
 	message_handlers["next_frame"] = _msg_next_frame;
 	message_handlers["speed_changed"] = _msg_speed_changed;
 	message_handlers["debug_mute_audio"] = _msg_debug_mute_audio;
-	message_handlers["set_hdr_output_requested"] = _msg_set_hdr_output_requested;
-	message_handlers["set_hdr_reference_luminance"] = _msg_set_hdr_reference_luminance;
-	message_handlers["set_hdr_max_luminance"] = _msg_set_hdr_max_luminance;
+	message_handlers["set_hdr_settings"] = _msg_set_hdr_settings;
+	message_handlers["request_hdr_state"] = _msg_request_hdr_state;
 	message_handlers["override_cameras"] = _msg_override_cameras;
 	message_handlers["transform_camera_2d"] = _msg_transform_camera_2d;
 #ifndef _3D_DISABLED
