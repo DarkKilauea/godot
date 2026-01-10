@@ -49,10 +49,14 @@
 #include "editor/settings/editor_settings.h"
 #include "editor/themes/editor_scale.h"
 #include "scene/gui/button.h"
+#include "scene/gui/check_box.h"
 #include "scene/gui/flow_container.h"
 #include "scene/gui/label.h"
 #include "scene/gui/menu_button.h"
+#include "scene/gui/popup.h"
 #include "scene/gui/separator.h"
+#include "scene/gui/slider.h"
+#include "scene/gui/spin_box.h"
 
 void GameViewDebugger::_session_started(Ref<EditorDebuggerSession> p_session) {
 	if (!is_feature_enabled) {
@@ -231,6 +235,39 @@ void GameViewDebugger::set_select_mode(int p_mode) {
 void GameViewDebugger::set_debug_mute_audio(bool p_enabled) {
 	mute_audio = p_enabled;
 	EditorDebuggerNode::get_singleton()->set_debug_mute_audio(p_enabled);
+}
+
+void GameViewDebugger::set_hdr_output_requested(bool p_enabled) {
+	Array message;
+	message.append(p_enabled);
+	
+	for (Ref<EditorDebuggerSession> &I : sessions) {
+		if (I->is_active()) {
+			I->send_message("scene:set_hdr_output_requested", message);
+		}
+	}
+}
+
+void GameViewDebugger::set_hdr_reference_luminance(float p_luminance) {
+	Array message;
+	message.append(p_luminance);
+	
+	for (Ref<EditorDebuggerSession> &I : sessions) {
+		if (I->is_active()) {
+			I->send_message("scene:set_hdr_reference_luminance", message);
+		}
+	}
+}
+
+void GameViewDebugger::set_hdr_max_luminance(float p_luminance) {
+	Array message;
+	message.append(p_luminance);
+	
+	for (Ref<EditorDebuggerSession> &I : sessions) {
+		if (I->is_active()) {
+			I->send_message("scene:set_hdr_max_luminance", message);
+		}
+	}
 }
 
 void GameViewDebugger::set_camera_override(bool p_enabled) {
@@ -861,9 +898,9 @@ void GameView::_hide_selection_toggled(bool p_pressed) {
 }
 
 void GameView::_hdr_output_override_button_pressed() {
-	if (window_wrapper) {
-		window_wrapper->set_hdr_output_requested(!window_wrapper->is_hdr_output_requested());
-		_update_hdr_output_button();
+	if (hdr_options_popup) {
+		_update_hdr_popup_content();
+		hdr_options_popup->popup_centered();
 	}
 }
 
@@ -873,6 +910,140 @@ void GameView::_update_hdr_output_button() {
 		hdr_output_override_button->set_text(hdr_enabled ? TTRC("HDR") : TTRC("SDR"));
 		hdr_output_override_button->set_tooltip_text(hdr_enabled ? TTRC("HDR output enabled.") : TTRC("SDR output enabled."));
 	}
+}
+
+void GameView::_update_hdr_popup_content() {
+	if (!hdr_options_popup) {
+		return;
+	}
+
+	// For now, we'll read from window_wrapper if available, but the actual control
+	// will be through debugger messages to the embedded game
+	bool hdr_requested = false;
+	bool hdr_enabled = false;
+	
+	if (window_wrapper) {
+		hdr_requested = window_wrapper->is_hdr_output_requested();
+		hdr_enabled = window_wrapper->is_hdr_output_enabled();
+	}
+	
+	// Get DisplayServer for checking HDR support
+	DisplayServer *ds = DisplayServer::get_singleton();
+	
+	// Update max color value label
+	if (hdr_enabled && ds) {
+		// Try to get from the embedded window (window ID would need to be tracked)
+		// For now, show N/A as we need to query from the running game
+		hdr_max_color_label->set_text(TTR("Max Color Value: (querying from game...)"));
+	} else {
+		hdr_max_color_label->set_text(TTR("Max Color Value: N/A"));
+	}
+	
+	// Update request checkbox
+	hdr_request_checkbox->set_pressed_no_signal(hdr_requested);
+	
+	// Show/hide elements based on state
+	if (!hdr_requested) {
+		// SDR mode, HDR not requested
+		hdr_error_label->hide();
+		hdr_luminance_container->hide();
+	} else if (hdr_requested && !hdr_enabled) {
+		// HDR requested but not enabled - show error
+		hdr_luminance_container->hide();
+		hdr_error_label->show();
+		
+		// Determine why HDR is not available
+		String error_msg;
+		if (ds && !ds->has_feature(DisplayServer::FEATURE_HDR_OUTPUT)) {
+			error_msg = TTR("Display Server does not support HDR output.");
+		} else {
+			error_msg = TTR("HDR output is not available. Please ensure that your display is configured for HDR mode.");
+		}
+		hdr_error_label->set_text(error_msg);
+	} else {
+		// HDR mode - show luminance controls
+		hdr_error_label->hide();
+		hdr_luminance_container->show();
+		
+		// Set default values - these would ideally be queried from the game
+		bool auto_luminance = true;  // Default to auto
+		hdr_auto_luminance_checkbox->set_pressed_no_signal(auto_luminance);
+		
+		if (auto_luminance) {
+			hdr_reference_luminance_container->hide();
+			hdr_max_luminance_container->hide();
+		} else {
+			hdr_reference_luminance_container->show();
+			hdr_max_luminance_container->show();
+		}
+	}
+}
+
+void GameView::_hdr_request_checkbox_toggled(bool p_enabled) {
+	// Send message to debugger to control the embedded game
+	debugger->set_hdr_output_requested(p_enabled);
+	
+	// Also update window_wrapper if we're in floating mode
+	if (window_wrapper) {
+		window_wrapper->set_hdr_output_requested(p_enabled);
+	}
+	
+	_update_hdr_output_button();
+	_update_hdr_popup_content();
+}
+
+void GameView::_hdr_auto_luminance_checkbox_toggled(bool p_enabled) {
+	if (p_enabled) {
+		// Enable automatic luminance by sending -1
+		debugger->set_hdr_reference_luminance(-1.0);
+		debugger->set_hdr_max_luminance(-1.0);
+	} else {
+		// Set to current/default values
+		debugger->set_hdr_reference_luminance(100.0);
+		debugger->set_hdr_max_luminance(1000.0);
+	}
+	
+	_update_hdr_popup_content();
+}
+
+void GameView::_hdr_reference_luminance_changed(double p_value) {
+	// Keep slider and spinbox synchronized
+	if (hdr_reference_luminance_slider->get_value() != p_value) {
+		hdr_reference_luminance_slider->set_value(p_value);
+	}
+	if (hdr_reference_luminance_spinbox->get_value() != p_value) {
+		hdr_reference_luminance_spinbox->set_value(p_value);
+	}
+	
+	// Send to embedded game via debugger
+	debugger->set_hdr_reference_luminance(p_value);
+	
+	// Update max luminance slider minimum to match reference
+	if (hdr_max_luminance_slider->get_value() < p_value) {
+		hdr_max_luminance_slider->set_value(p_value);
+	}
+	hdr_max_luminance_slider->set_min(p_value);
+	hdr_max_luminance_spinbox->set_min(p_value);
+}
+
+void GameView::_hdr_max_luminance_changed(double p_value) {
+	// Keep slider and spinbox synchronized
+	if (hdr_max_luminance_slider->get_value() != p_value) {
+		hdr_max_luminance_slider->set_value(p_value);
+	}
+	if (hdr_max_luminance_spinbox->get_value() != p_value) {
+		hdr_max_luminance_spinbox->set_value(p_value);
+	}
+	
+	// Send to embedded game via debugger
+	debugger->set_hdr_max_luminance(p_value);
+	
+	// Update reference luminance slider maximum to match max
+	if (hdr_reference_luminance_slider->get_value() > p_value) {
+		hdr_reference_luminance_slider->set_value(p_value);
+	}
+	hdr_reference_luminance_slider->set_max(p_value);
+	hdr_reference_luminance_spinbox->set_max(p_value);
 }
 
 void GameView::_debug_mute_audio_button_pressed() {
@@ -1405,8 +1576,124 @@ GameView::GameView(Ref<GameViewDebugger> p_debugger, EmbeddedProcessBase *p_embe
 	hdr_hb->add_child(hdr_output_override_button);
 	hdr_output_override_button->set_theme_type_variation(SceneStringName(FlatButton));
 	hdr_output_override_button->connect(SceneStringName(pressed), callable_mp(this, &GameView::_hdr_output_override_button_pressed));
-	hdr_output_override_button->set_tooltip_text(TTRC("Loading..."));
+	hdr_output_override_button->set_tooltip_text(TTRC("HDR/SDR Output Options"));
 	hdr_output_override_button->set_text(TTRC("HDR"));
+	
+	// Create HDR options popup
+	hdr_options_popup = memnew(PopupPanel);
+	add_child(hdr_options_popup);
+	hdr_options_popup->set_title(TTRC("HDR Output Options"));
+	
+	VBoxContainer *hdr_popup_vbox = memnew(VBoxContainer);
+	hdr_options_popup->add_child(hdr_popup_vbox);
+	hdr_popup_vbox->set_custom_minimum_size(Size2(300, 0) * EDSCALE);
+	
+	// Max color value label
+	hdr_max_color_label = memnew(Label);
+	hdr_popup_vbox->add_child(hdr_max_color_label);
+	hdr_max_color_label->set_text(TTR("Max Color Value: N/A"));
+	
+	hdr_popup_vbox->add_child(memnew(HSeparator));
+	
+	// Request HDR checkbox
+	hdr_request_checkbox = memnew(CheckBox);
+	hdr_popup_vbox->add_child(hdr_request_checkbox);
+	hdr_request_checkbox->set_text(TTR("Request HDR Output"));
+	hdr_request_checkbox->connect(SceneStringName(toggled), callable_mp(this, &GameView::_hdr_request_checkbox_toggled));
+	
+	// Error label (shown when HDR requested but not available)
+	hdr_error_label = memnew(Label);
+	hdr_popup_vbox->add_child(hdr_error_label);
+	hdr_error_label->set_autowrap_mode(TextServer::AUTOWRAP_WORD_SMART);
+	hdr_error_label->add_theme_color_override(SceneStringName(font_color), Color(1, 0.5, 0.5));
+	hdr_error_label->hide();
+	
+	// Luminance controls container (shown when HDR is enabled)
+	hdr_luminance_container = memnew(HBoxContainer);
+	hdr_popup_vbox->add_child(hdr_luminance_container);
+	hdr_luminance_container->set_v_size_flags(SIZE_EXPAND_FILL);
+	
+	VBoxContainer *luminance_vbox = memnew(VBoxContainer);
+	hdr_luminance_container->add_child(luminance_vbox);
+	luminance_vbox->set_h_size_flags(SIZE_EXPAND_FILL);
+	
+	hdr_popup_vbox->add_child(memnew(HSeparator));
+	
+	// Auto luminance checkbox
+	hdr_auto_luminance_checkbox = memnew(CheckBox);
+	luminance_vbox->add_child(hdr_auto_luminance_checkbox);
+	hdr_auto_luminance_checkbox->set_text(TTR("Automatic Luminance"));
+	hdr_auto_luminance_checkbox->set_pressed(true);
+	hdr_auto_luminance_checkbox->connect(SceneStringName(toggled), callable_mp(this, &GameView::_hdr_auto_luminance_checkbox_toggled));
+	
+	luminance_vbox->add_child(memnew(HSeparator));
+	
+	// Reference luminance controls
+	hdr_reference_luminance_container = memnew(HBoxContainer);
+	luminance_vbox->add_child(hdr_reference_luminance_container);
+	
+	VBoxContainer *ref_lum_vbox = memnew(VBoxContainer);
+	hdr_reference_luminance_container->add_child(ref_lum_vbox);
+	ref_lum_vbox->set_h_size_flags(SIZE_EXPAND_FILL);
+	
+	hdr_reference_luminance_label = memnew(Label);
+	ref_lum_vbox->add_child(hdr_reference_luminance_label);
+	hdr_reference_luminance_label->set_text(TTR("Reference Luminance (nits)"));
+	
+	HBoxContainer *ref_lum_controls = memnew(HBoxContainer);
+	ref_lum_vbox->add_child(ref_lum_controls);
+	
+	hdr_reference_luminance_slider = memnew(HSlider);
+	ref_lum_controls->add_child(hdr_reference_luminance_slider);
+	hdr_reference_luminance_slider->set_h_size_flags(SIZE_EXPAND_FILL);
+	hdr_reference_luminance_slider->set_min(10.0);
+	hdr_reference_luminance_slider->set_max(2000.0);
+	hdr_reference_luminance_slider->set_step(10.0);
+	hdr_reference_luminance_slider->set_value(100.0);
+	hdr_reference_luminance_slider->connect(SceneStringName(value_changed), callable_mp(this, &GameView::_hdr_reference_luminance_changed));
+	
+	hdr_reference_luminance_spinbox = memnew(SpinBox);
+	ref_lum_controls->add_child(hdr_reference_luminance_spinbox);
+	hdr_reference_luminance_spinbox->set_min(10.0);
+	hdr_reference_luminance_spinbox->set_max(2000.0);
+	hdr_reference_luminance_spinbox->set_step(10.0);
+	hdr_reference_luminance_spinbox->set_value(100.0);
+	hdr_reference_luminance_spinbox->connect(SceneStringName(value_changed), callable_mp(this, &GameView::_hdr_reference_luminance_changed));
+	hdr_reference_luminance_spinbox->set_custom_minimum_size(Size2(80, 0) * EDSCALE);
+	
+	// Max luminance controls
+	hdr_max_luminance_container = memnew(HBoxContainer);
+	luminance_vbox->add_child(hdr_max_luminance_container);
+	
+	VBoxContainer *max_lum_vbox = memnew(VBoxContainer);
+	hdr_max_luminance_container->add_child(max_lum_vbox);
+	max_lum_vbox->set_h_size_flags(SIZE_EXPAND_FILL);
+	
+	hdr_max_luminance_label = memnew(Label);
+	max_lum_vbox->add_child(hdr_max_luminance_label);
+	hdr_max_luminance_label->set_text(TTR("Max Luminance (nits)"));
+	
+	HBoxContainer *max_lum_controls = memnew(HBoxContainer);
+	max_lum_vbox->add_child(max_lum_controls);
+	
+	hdr_max_luminance_slider = memnew(HSlider);
+	max_lum_controls->add_child(hdr_max_luminance_slider);
+	hdr_max_luminance_slider->set_h_size_flags(SIZE_EXPAND_FILL);
+	hdr_max_luminance_slider->set_min(100.0);
+	hdr_max_luminance_slider->set_max(2000.0);
+	hdr_max_luminance_slider->set_step(10.0);
+	hdr_max_luminance_slider->set_value(1000.0);
+	hdr_max_luminance_slider->connect(SceneStringName(value_changed), callable_mp(this, &GameView::_hdr_max_luminance_changed));
+	
+	hdr_max_luminance_spinbox = memnew(SpinBox);
+	max_lum_controls->add_child(hdr_max_luminance_spinbox);
+	hdr_max_luminance_spinbox->set_min(100.0);
+	hdr_max_luminance_spinbox->set_max(2000.0);
+	hdr_max_luminance_spinbox->set_step(10.0);
+	hdr_max_luminance_spinbox->set_value(1000.0);
+	hdr_max_luminance_spinbox->connect(SceneStringName(value_changed), callable_mp(this, &GameView::_hdr_max_luminance_changed));
+	hdr_max_luminance_spinbox->set_custom_minimum_size(Size2(80, 0) * EDSCALE);
+	
 	hdr_hb->add_child(memnew(VSeparator));
 
 	HBoxContainer *audio_hb = memnew(HBoxContainer);

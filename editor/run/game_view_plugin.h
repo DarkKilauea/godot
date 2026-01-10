@@ -97,6 +97,10 @@ public:
 	void set_selection_prefer_group(bool p_enabled);
 
 	void set_debug_mute_audio(bool p_enabled);
+	
+	void set_hdr_output_requested(bool p_enabled);
+	void set_hdr_reference_luminance(float p_luminance);
+	void set_hdr_max_luminance(float p_luminance);
 
 	void set_camera_override(bool p_enabled);
 	void set_camera_manipulate_mode(EditorDebuggerNode::CameraOverride p_mode);
@@ -177,6 +181,20 @@ class GameView : public VBoxContainer {
 	MenuButton *camera_override_menu = nullptr;
 
 	Button *hdr_output_override_button = nullptr;
+	PopupPanel *hdr_options_popup = nullptr;
+	Label *hdr_max_color_label = nullptr;
+	CheckBox *hdr_request_checkbox = nullptr;
+	Label *hdr_error_label = nullptr;
+	HBoxContainer *hdr_luminance_container = nullptr;
+	CheckBox *hdr_auto_luminance_checkbox = nullptr;
+	HBoxContainer *hdr_reference_luminance_container = nullptr;
+	Label *hdr_reference_luminance_label = nullptr;
+	HSlider *hdr_reference_luminance_slider = nullptr;
+	SpinBox *hdr_reference_luminance_spinbox = nullptr;
+	HBoxContainer *hdr_max_luminance_container = nullptr;
+	Label *hdr_max_luminance_label = nullptr;
+	HSlider *hdr_max_luminance_slider = nullptr;
+	SpinBox *hdr_max_luminance_spinbox = nullptr;
 
 	Button *debug_mute_audio_button = nullptr;
 
@@ -237,6 +255,11 @@ class GameView : public VBoxContainer {
 
 	void _hdr_output_override_button_pressed();
 	void _update_hdr_output_button();
+	void _update_hdr_popup_content();
+	void _hdr_request_checkbox_toggled(bool p_enabled);
+	void _hdr_auto_luminance_checkbox_toggled(bool p_enabled);
+	void _hdr_reference_luminance_changed(double p_value);
+	void _hdr_max_luminance_changed(double p_value);
 
 	void _debug_mute_audio_button_pressed();
 
