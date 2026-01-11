@@ -233,9 +233,10 @@ void GameViewDebugger::set_debug_mute_audio(bool p_enabled) {
 	EditorDebuggerNode::get_singleton()->set_debug_mute_audio(p_enabled);
 }
 
-void GameViewDebugger::set_hdr_settings(const Dictionary &p_settings) {
+void GameViewDebugger::set_hdr_settings(const Array &p_settings) {
+	// p_settings is already an Array, just wrap it in another Array for the message
 	Array message;
-	message.append(p_settings);
+	message.append_array(p_settings);
 	
 	for (Ref<EditorDebuggerSession> &I : sessions) {
 		if (I->is_active()) {
@@ -298,7 +299,7 @@ void GameViewDebugger::_feature_profile_changed() {
 void GameViewDebugger::_bind_methods() {
 	ADD_SIGNAL(MethodInfo("session_started"));
 	ADD_SIGNAL(MethodInfo("session_stopped"));
-	ADD_SIGNAL(MethodInfo("hdr_state_received", PropertyInfo(Variant::DICTIONARY, "state")));
+	ADD_SIGNAL(MethodInfo("hdr_state_received", PropertyInfo(Variant::ARRAY, "state")));
 }
 
 bool GameViewDebugger::add_screenshot_callback(const Callable &p_callaback, const Rect2i &p_rect) {
@@ -338,10 +339,8 @@ bool GameViewDebugger::_msg_get_screenshot(const Array &p_args) {
 }
 
 bool GameViewDebugger::_msg_get_hdr_state(const Array &p_args) {
-	ERR_FAIL_COND_V_MSG(p_args.size() != 1, false, "get_hdr_state: invalid number of arguments");
-	
-	Dictionary state = p_args[0];
-	emit_signal(SNAME("hdr_state_received"), state);
+	// p_args is the Array sent from the game, emit it directly
+	emit_signal(SNAME("hdr_state_received"), p_args);
 	return true;
 }
 
@@ -388,6 +387,11 @@ void GameView::_sessions_changed() {
 	}
 
 	_update_debugger_buttons();
+	
+	// Request HDR state when session starts/stops to update button
+	if (active_sessions > 0) {
+		debugger->request_hdr_state();
+	}
 
 #ifdef MACOS_ENABLED
 	if (!embedded_script_debugger || !embedded_script_debugger->is_session_active() || embedded_script_debugger->get_remote_pid() != embedded_process->get_embedded_pid()) {
@@ -894,28 +898,27 @@ void GameView::_hdr_output_override_button_pressed() {
 	if (hdr_options_popup) {
 		// Request current state from game
 		debugger->request_hdr_state();
-		hdr_options_popup->popup_centered();
+		
+		// Position popup below the button like a MenuButton
+		Rect2 button_rect = hdr_output_override_button->get_screen_rect();
+		Vector2 popup_pos = button_rect.position + Vector2(0, button_rect.size.y);
+		hdr_options_popup->set_position(popup_pos);
+		hdr_options_popup->popup();
 	}
 }
 
 void GameView::_update_hdr_output_button() {
-	if (window_wrapper) {
-		bool hdr_enabled = window_wrapper->is_hdr_output_enabled();
-		hdr_output_override_button->set_text(hdr_enabled ? TTRC("HDR") : TTRC("SDR"));
-		hdr_output_override_button->set_tooltip_text(hdr_enabled ? TTRC("HDR output enabled.") : TTRC("SDR output enabled."));
-	}
+	// This will be updated when we receive HDR state from game
 }
 
-void GameView::_hdr_settings_changed(const Dictionary &p_settings) {
-	// Send settings to game via debugger
+void GameView::_hdr_settings_changed(const Array &p_settings) {
+	// Send settings to game via debugger (now using Array)
 	debugger->set_hdr_settings(p_settings);
 	
 	// Also update window_wrapper if we're in floating mode
-	if (window_wrapper && p_settings.has("requested")) {
-		window_wrapper->set_hdr_output_requested(p_settings["requested"]);
+	if (window_wrapper && p_settings.size() > 0) {
+		window_wrapper->set_hdr_output_requested(p_settings[0]);
 	}
-	
-	_update_hdr_output_button();
 }
 
 void GameView::_update_hdr_state() {
@@ -924,35 +927,24 @@ void GameView::_update_hdr_state() {
 	debugger->request_hdr_state();
 }
 
-void GameView::_on_hdr_state_received(const Dictionary &p_state) {
-	if (!hdr_options_popup) {
+void GameView::_on_hdr_state_received(const Array &p_state) {
+	if (!hdr_options_popup || p_state.size() < 10) {
 		return;
 	}
 	
-	// Convert Dictionary to HDRSettings struct
+	// Convert Array to HDRSettings struct
+	// Array format: [requested, enabled, auto_ref, auto_max, ref_lum, max_lum, current_ref, current_max, max_color_value, error_code]
 	HDROptionsPopup::HDRSettings settings;
-	
-	if (p_state.has("requested")) {
-		settings.requested = p_state["requested"];
-	}
-	if (p_state.has("enabled")) {
-		settings.enabled = p_state["enabled"];
-	}
-	if (p_state.has("auto_luminance")) {
-		settings.auto_luminance = p_state["auto_luminance"];
-	}
-	if (p_state.has("reference_luminance")) {
-		settings.reference_luminance = p_state["reference_luminance"];
-	}
-	if (p_state.has("max_luminance")) {
-		settings.max_luminance = p_state["max_luminance"];
-	}
-	if (p_state.has("current_max_luminance")) {
-		settings.current_max_luminance = p_state["current_max_luminance"];
-	}
-	if (p_state.has("error_message")) {
-		settings.error_message = p_state["error_message"];
-	}
+	settings.requested = p_state[0];
+	settings.enabled = p_state[1];
+	settings.auto_ref_luminance = p_state[2];
+	settings.auto_max_luminance = p_state[3];
+	settings.reference_luminance = p_state[4];
+	settings.max_luminance = p_state[5];
+	settings.current_ref_luminance = p_state[6];
+	settings.current_max_luminance = p_state[7];
+	settings.max_color_value = p_state[8];
+	settings.error_code = p_state[9];
 	
 	// Update popup with received state
 	hdr_options_popup->update_from_settings(settings);

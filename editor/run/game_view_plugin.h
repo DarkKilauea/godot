@@ -100,7 +100,7 @@ public:
 
 	void set_debug_mute_audio(bool p_enabled);
 	
-	void set_hdr_settings(const Dictionary &p_settings);
+	void set_hdr_settings(const Array &p_settings);
 	void request_hdr_state();
 
 	void set_camera_override(bool p_enabled);
@@ -243,9 +243,9 @@ class GameView : public VBoxContainer {
 
 	void _hdr_output_override_button_pressed();
 	void _update_hdr_output_button();
-	void _hdr_settings_changed(const Dictionary &p_settings);
+	void _hdr_settings_changed(const Array &p_settings);
 	void _update_hdr_state();
-	void _on_hdr_state_received(const Dictionary &p_state);
+	void _on_hdr_state_received(const Array &p_state);
 
 	void _debug_mute_audio_button_pressed();
 

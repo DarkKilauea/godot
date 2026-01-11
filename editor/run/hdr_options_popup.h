@@ -44,11 +44,14 @@ public:
 	struct HDRSettings {
 		bool requested = false;
 		bool enabled = false;
-		bool auto_luminance = true;
+		bool auto_ref_luminance = true;
+		bool auto_max_luminance = true;
 		float reference_luminance = 100.0;
 		float max_luminance = 1000.0;
+		float current_ref_luminance = 100.0;
 		float current_max_luminance = 1000.0;
-		String error_message;
+		float max_color_value = 1.0;
+		int error_code = 0;  // 0 = no error, 1 = not supported, 2 = not available
 	};
 
 private:
@@ -56,22 +59,27 @@ private:
 	CheckBox *request_checkbox = nullptr;
 	Label *error_label = nullptr;
 	HBoxContainer *luminance_container = nullptr;
-	CheckBox *auto_luminance_checkbox = nullptr;
+	Label *current_luminance_label = nullptr;
 	HBoxContainer *reference_luminance_container = nullptr;
 	Label *reference_luminance_label = nullptr;
+	CheckBox *auto_ref_luminance_checkbox = nullptr;
 	HSlider *reference_luminance_slider = nullptr;
 	SpinBox *reference_luminance_spinbox = nullptr;
 	HBoxContainer *max_luminance_container = nullptr;
 	Label *max_luminance_label = nullptr;
+	CheckBox *auto_max_luminance_checkbox = nullptr;
 	HSlider *max_luminance_slider = nullptr;
 	SpinBox *max_luminance_spinbox = nullptr;
 
 	HDRSettings current_settings;
 
 	void _request_checkbox_toggled(bool p_enabled);
-	void _auto_luminance_checkbox_toggled(bool p_enabled);
+	void _auto_ref_luminance_toggled(bool p_enabled);
+	void _auto_max_luminance_toggled(bool p_enabled);
 	void _reference_luminance_changed(double p_value);
 	void _max_luminance_changed(double p_value);
+	
+	Array _create_settings_array();
 
 protected:
 	static void _bind_methods();
