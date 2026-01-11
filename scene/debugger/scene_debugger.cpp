@@ -225,8 +225,9 @@ Error SceneDebugger::_msg_debug_mute_audio(const Array &p_args) {
 }
 
 Error SceneDebugger::_msg_set_hdr_settings(const Array &p_args) {
-	// Array format: [requested, auto_ref, auto_max, ref_luminance, max_luminance]
-	ERR_FAIL_COND_V(p_args.size() < 5, ERR_INVALID_DATA);
+	// Array format: [requested, ref_luminance, max_luminance]
+	// Negative luminance values indicate automatic mode
+	ERR_FAIL_COND_V(p_args.size() < 3, ERR_INVALID_DATA);
 	
 	Window *root = SceneTree::get_singleton()->get_root();
 	ERR_FAIL_NULL_V(root, ERR_UNAVAILABLE);
@@ -234,10 +235,8 @@ Error SceneDebugger::_msg_set_hdr_settings(const Array &p_args) {
 	ERR_FAIL_NULL_V(ds, ERR_UNAVAILABLE);
 	
 	bool requested = p_args[0];
-	bool auto_ref = p_args[1];
-	bool auto_max = p_args[2];
-	float ref_luminance = p_args[3];
-	float max_luminance = p_args[4];
+	float ref_luminance = p_args[1];  // Negative = auto
+	float max_luminance = p_args[2];  // Negative = auto
 	
 	// Apply HDR settings
 	root->set_hdr_output_requested(requested);
@@ -262,9 +261,6 @@ Error SceneDebugger::_msg_request_hdr_state(const Array &p_args) {
 	float ref_luminance = ds->window_get_hdr_output_reference_luminance(root->get_window_id());
 	float max_luminance = ds->window_get_hdr_output_max_luminance(root->get_window_id());
 	
-	bool auto_ref = (ref_luminance < 0);
-	bool auto_max = (max_luminance < 0);
-	
 	float current_ref = ds->window_get_hdr_output_current_reference_luminance(root->get_window_id());
 	float current_max = ds->window_get_hdr_output_current_max_luminance(root->get_window_id());
 	
@@ -278,29 +274,26 @@ Error SceneDebugger::_msg_request_hdr_state(const Array &p_args) {
 	}
 	
 	// Determine error code if HDR requested but not enabled
-	int error_code = 0;
+	HDRErrorCode error_code = HDR_ERROR_NONE;
 	if (requested && !enabled) {
 		if (!ds->has_feature(DisplayServer::FEATURE_HDR_OUTPUT)) {
-			error_code = 1; // Not supported
+			error_code = HDR_ERROR_NOT_SUPPORTED;
 		} else if (!ds->window_is_hdr_output_supported(root->get_window_id())) {
-			error_code = 2; // Not available on current screen
-		} else {
-			error_code = 0; // Generic error
+			error_code = HDR_ERROR_NOT_AVAILABLE;
 		}
 	}
 	
-	// Build state array
-	// Format: [requested, enabled, auto_ref, auto_max, ref_lum, max_lum, current_ref, current_max, max_color_value, error_code]
+	// Build state array - using negative values to indicate auto mode
+	// Format: [requested, enabled, ref_lum, max_lum, current_ref, current_max, max_color_value, error_code]
+	// ref_lum and max_lum are negative if in auto mode
 	state.append(requested);
 	state.append(enabled);
-	state.append(auto_ref);
-	state.append(auto_max);
-	state.append(auto_ref ? current_ref : ref_luminance);
-	state.append(auto_max ? current_max : max_luminance);
+	state.append(ref_luminance);  // Already negative if auto
+	state.append(max_luminance);  // Already negative if auto
 	state.append(current_ref);
 	state.append(current_max);
 	state.append(max_color_value);
-	state.append(error_code);
+	state.append((int)error_code);
 	
 	// Send state back to editor
 	EngineDebugger::get_singleton()->send_message("game_view:hdr_state", state);

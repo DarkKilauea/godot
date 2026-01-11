@@ -51,6 +51,13 @@ class Node3D;
 #endif // _3D_DISABLED
 
 class SceneDebugger {
+public:
+	enum HDRErrorCode {
+		HDR_ERROR_NONE = 0,
+		HDR_ERROR_NOT_SUPPORTED = 1,
+		HDR_ERROR_NOT_AVAILABLE = 2,
+	};
+
 private:
 	inline static SceneDebugger *singleton = nullptr;
 

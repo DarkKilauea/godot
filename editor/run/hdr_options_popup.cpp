@@ -32,7 +32,7 @@
 
 #include "editor/themes/editor_scale.h"
 #include "scene/gui/separator.h"
-#include "scene/main/scene_string_names.h"
+#include "scene/scene_string_names.h"
 
 void HDROptionsPopup::_bind_methods() {
 	ADD_SIGNAL(MethodInfo("hdr_settings_changed", PropertyInfo(Variant::ARRAY, "settings")));
@@ -46,8 +46,6 @@ void HDROptionsPopup::_request_checkbox_toggled(bool p_enabled) {
 }
 
 void HDROptionsPopup::_auto_ref_luminance_toggled(bool p_enabled) {
-	current_settings.auto_ref_luminance = p_enabled;
-	
 	reference_luminance_slider->set_editable(!p_enabled);
 	reference_luminance_spinbox->set_editable(!p_enabled);
 	
@@ -64,8 +62,6 @@ void HDROptionsPopup::_auto_ref_luminance_toggled(bool p_enabled) {
 }
 
 void HDROptionsPopup::_auto_max_luminance_toggled(bool p_enabled) {
-	current_settings.auto_max_luminance = p_enabled;
-	
 	max_luminance_slider->set_editable(!p_enabled);
 	max_luminance_spinbox->set_editable(!p_enabled);
 	
@@ -82,7 +78,7 @@ void HDROptionsPopup::_auto_max_luminance_toggled(bool p_enabled) {
 }
 
 void HDROptionsPopup::_reference_luminance_changed(double p_value) {
-	if (current_settings.auto_ref_luminance) {
+	if (current_settings.reference_luminance < 0) {
 		return; // Ignore changes when in auto mode
 	}
 	
@@ -108,7 +104,7 @@ void HDROptionsPopup::_reference_luminance_changed(double p_value) {
 }
 
 void HDROptionsPopup::_max_luminance_changed(double p_value) {
-	if (current_settings.auto_max_luminance) {
+	if (current_settings.max_luminance < 0) {
 		return; // Ignore changes when in auto mode
 	}
 	
@@ -134,10 +130,10 @@ void HDROptionsPopup::_max_luminance_changed(double p_value) {
 }
 
 Array HDROptionsPopup::_create_settings_array() {
+	// Compressed format: [requested, ref_luminance, max_luminance]
+	// Negative luminance values indicate automatic mode
 	Array settings;
 	settings.append(current_settings.requested);
-	settings.append(current_settings.auto_ref_luminance);
-	settings.append(current_settings.auto_max_luminance);
 	settings.append(current_settings.reference_luminance);
 	settings.append(current_settings.max_luminance);
 	return settings;
@@ -185,21 +181,25 @@ void HDROptionsPopup::update_from_settings(const HDRSettings &p_settings) {
 		current_luminance_label->set_text(vformat(TTR("Current: Ref %.0f nits, Max %.0f nits"), 
 			p_settings.current_ref_luminance, p_settings.current_max_luminance));
 		
+		// Determine auto state from negative values
+		bool auto_ref = (p_settings.reference_luminance < 0);
+		bool auto_max = (p_settings.max_luminance < 0);
+		
 		// Update auto checkboxes
-		auto_ref_luminance_checkbox->set_pressed_no_signal(p_settings.auto_ref_luminance);
-		auto_max_luminance_checkbox->set_pressed_no_signal(p_settings.auto_max_luminance);
+		auto_ref_luminance_checkbox->set_pressed_no_signal(auto_ref);
+		auto_max_luminance_checkbox->set_pressed_no_signal(auto_max);
 		
 		// Update sliders/spinboxes based on auto state
-		reference_luminance_slider->set_editable(!p_settings.auto_ref_luminance);
-		reference_luminance_spinbox->set_editable(!p_settings.auto_ref_luminance);
-		max_luminance_slider->set_editable(!p_settings.auto_max_luminance);
-		max_luminance_spinbox->set_editable(!p_settings.auto_max_luminance);
+		reference_luminance_slider->set_editable(!auto_ref);
+		reference_luminance_spinbox->set_editable(!auto_ref);
+		max_luminance_slider->set_editable(!auto_max);
+		max_luminance_spinbox->set_editable(!auto_max);
 		
 		// Update slider values and ranges
 		reference_luminance_slider->set_max(p_settings.current_max_luminance);
 		reference_luminance_spinbox->set_max(p_settings.current_max_luminance);
 		
-		float ref_value = p_settings.auto_ref_luminance ? p_settings.current_ref_luminance : p_settings.reference_luminance;
+		float ref_value = auto_ref ? p_settings.current_ref_luminance : p_settings.reference_luminance;
 		reference_luminance_slider->set_value(ref_value);
 		reference_luminance_spinbox->set_value(ref_value);
 		
@@ -208,7 +208,7 @@ void HDROptionsPopup::update_from_settings(const HDRSettings &p_settings) {
 		max_luminance_slider->set_max(p_settings.current_max_luminance);
 		max_luminance_spinbox->set_max(p_settings.current_max_luminance);
 		
-		float max_value = p_settings.auto_max_luminance ? p_settings.current_max_luminance : p_settings.max_luminance;
+		float max_value = auto_max ? p_settings.current_max_luminance : p_settings.max_luminance;
 		max_luminance_slider->set_value(max_value);
 		max_luminance_spinbox->set_value(max_value);
 	}

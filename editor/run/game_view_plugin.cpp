@@ -928,23 +928,22 @@ void GameView::_update_hdr_state() {
 }
 
 void GameView::_on_hdr_state_received(const Array &p_state) {
-	if (!hdr_options_popup || p_state.size() < 10) {
+	if (!hdr_options_popup || p_state.size() < 8) {
 		return;
 	}
 	
 	// Convert Array to HDRSettings struct
-	// Array format: [requested, enabled, auto_ref, auto_max, ref_lum, max_lum, current_ref, current_max, max_color_value, error_code]
+	// Compressed format: [requested, enabled, ref_lum, max_lum, current_ref, current_max, max_color_value, error_code]
+	// Negative ref_lum and max_lum indicate auto mode
 	HDROptionsPopup::HDRSettings settings;
 	settings.requested = p_state[0];
 	settings.enabled = p_state[1];
-	settings.auto_ref_luminance = p_state[2];
-	settings.auto_max_luminance = p_state[3];
-	settings.reference_luminance = p_state[4];
-	settings.max_luminance = p_state[5];
-	settings.current_ref_luminance = p_state[6];
-	settings.current_max_luminance = p_state[7];
-	settings.max_color_value = p_state[8];
-	settings.error_code = p_state[9];
+	settings.reference_luminance = p_state[2];  // Negative = auto
+	settings.max_luminance = p_state[3];  // Negative = auto
+	settings.current_ref_luminance = p_state[4];
+	settings.current_max_luminance = p_state[5];
+	settings.max_color_value = p_state[6];
+	settings.error_code = p_state[7];
 	
 	// Update popup with received state
 	hdr_options_popup->update_from_settings(settings);

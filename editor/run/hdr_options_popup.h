@@ -44,10 +44,8 @@ public:
 	struct HDRSettings {
 		bool requested = false;
 		bool enabled = false;
-		bool auto_ref_luminance = true;
-		bool auto_max_luminance = true;
-		float reference_luminance = 100.0;
-		float max_luminance = 1000.0;
+		float reference_luminance = -1.0;  // Negative = auto
+		float max_luminance = -1.0;  // Negative = auto
 		float current_ref_luminance = 100.0;
 		float current_max_luminance = 1000.0;
 		float max_color_value = 1.0;
