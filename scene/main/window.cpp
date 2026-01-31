@@ -925,6 +925,10 @@ void Window::_event_callback(DisplayServerEnums::WindowEvent p_event) {
 		case DisplayServerEnums::WINDOW_EVENT_FORCE_CLOSE: {
 			hide();
 		} break;
+		case DisplayServerEnums::WINDOW_EVENT_HDR_OUTPUT_CHANGED: {
+			_propagate_window_notification(this, NOTIFICATION_WM_HDR_OUTPUT_CHANGED);
+			emit_signal(SNAME("hdr_output_changed"));
+		} break;
 	}
 }
 
@@ -3577,6 +3581,7 @@ void Window::_bind_methods() {
 	ADD_SIGNAL(MethodInfo("dpi_changed"));
 	ADD_SIGNAL(MethodInfo("titlebar_changed"));
 	ADD_SIGNAL(MethodInfo("title_changed"));
+	ADD_SIGNAL(MethodInfo("hdr_output_changed"));
 
 	BIND_CONSTANT(NOTIFICATION_VISIBILITY_CHANGED);
 	BIND_CONSTANT(NOTIFICATION_THEME_CHANGED);
