@@ -1194,22 +1194,15 @@ static BOOL CALLBACK _MonitorEnumProcCount(HMONITOR hMonitor, HDC hdcMonitor, LP
 	return TRUE;
 }
 
-static BOOL CALLBACK _MonitorEnumProcMonitor(HMONITOR hMonitor, HDC hdcMonitor, LPRECT lprcMonitor, LPARAM dwData) {
-	EnumScreenData *data = (EnumScreenData *)dwData;
-
-	if (data->screen == data->count) {
-		data->monitor = hMonitor;
-		return FALSE;
-	}
-
-	data->count++;
+static BOOL CALLBACK _MonitorEnumProcCollectMonitors(HMONITOR hMonitor, HDC hdcMonitor, LPRECT lprcMonitor, LPARAM dwData) {
+	LocalVector<HMONITOR> *monitors = (LocalVector<HMONITOR> *)dwData;
+	monitors->push_back(hMonitor);
 	return TRUE;
 }
 
-static HMONITOR _get_hmonitor_of_screen(int p_screen) {
-	EnumScreenData data = { 0, p_screen, nullptr };
-	EnumDisplayMonitors(nullptr, nullptr, _MonitorEnumProcMonitor, (LPARAM)&data);
-	return data.monitor;
+static void _get_all_hmonitors(LocalVector<HMONITOR> &r_monitors) {
+	r_monitors.clear();
+	EnumDisplayMonitors(nullptr, nullptr, _MonitorEnumProcCollectMonitors, (LPARAM)&r_monitors);
 }
 
 int DisplayServerWindows::get_screen_count() const {
@@ -1300,14 +1293,6 @@ typedef struct {
 	int screen;
 	float rate;
 } EnumRefreshRateData;
-
-typedef struct {
-	Vector<DISPLAYCONFIG_PATH_INFO> paths;
-	Vector<DISPLAYCONFIG_MODE_INFO> modes;
-	int count;
-	int screen;
-	float sdrWhiteLevelInNits;
-} EnumSdrWhiteLevelData;
 
 static BOOL CALLBACK _MonitorEnumProcSize(HMONITOR hMonitor, HDC hdcMonitor, LPRECT lprcMonitor, LPARAM dwData) {
 	EnumSizeData *data = (EnumSizeData *)dwData;
@@ -1593,63 +1578,22 @@ Ref<Image> DisplayServerWindows::screen_get_image_rect(const Rect2i &p_rect) con
 	return img;
 }
 
-#ifdef D3D12_ENABLED
-static bool _get_monitor_desc(HMONITOR p_monitor, IDXGIFactory2 *dxgi_factory, DXGI_OUTPUT_DESC1 &r_Desc) {
-	r_Desc = {};
-
-	// Note: As of August, 2025 Microsoft's sample code only checks the default
-	// adapter, but sometimes p_monitor may belong to another adapter.
-	Microsoft::WRL::ComPtr<IDXGIAdapter1> dxgiAdapter;
-	UINT adapter_i = 0;
-	while (dxgi_factory->EnumAdapters1(adapter_i, &dxgiAdapter) == S_OK) {
-		Microsoft::WRL::ComPtr<IDXGIOutput> dxgiOutput;
-		DXGI_OUTPUT_DESC1 desc1;
-		UINT output_i = 0;
-		while (dxgiAdapter->EnumOutputs(output_i, &dxgiOutput) != DXGI_ERROR_NOT_FOUND) {
-			Microsoft::WRL::ComPtr<IDXGIOutput6> output6;
-			if (FAILED(dxgiOutput.As(&output6))) {
-				continue;
-			}
-
-			if (FAILED(output6->GetDesc1(&desc1))) {
-				continue;
-			}
-
-			if (desc1.Monitor == p_monitor) {
-				r_Desc = desc1;
-				return true;
-			}
-
-			output_i++;
-		}
-		adapter_i++;
-	}
-
-	return false;
-}
-#endif // D3D12_ENABLED
-
 // Store a list of displays that have failed to get their SDR white level so we don't spam the error log.
 static HashSet<Vector3i> displays_with_white_level_error;
 
-static BOOL CALLBACK _MonitorEnumProcSdrWhiteLevel(HMONITOR hMonitor, HDC hdcMonitor, LPRECT lprcMonitor, LPARAM dwData) {
-	EnumSdrWhiteLevelData *data = (EnumSdrWhiteLevelData *)dwData;
-
-	// Only return TRUE to go to the next screen. Everything past this point should return FALSE.
-	if (data->count != data->screen) {
-		data->count++;
-		return TRUE;
+static float _get_sdr_white_level_for_hmonitor(HMONITOR p_monitor, const LocalVector<DISPLAYCONFIG_PATH_INFO> &p_paths) {
+	if (!p_monitor) {
+		return 0.0f;
 	}
 
 	MONITORINFOEXW minfo;
 	memset(&minfo, 0, sizeof(minfo));
 	minfo.cbSize = sizeof(minfo);
-	if (!GetMonitorInfoW(hMonitor, &minfo)) {
-		ERR_FAIL_V_MSG(FALSE, vformat("Failed to get monitor info for screen: %d", data->screen));
+	if (!GetMonitorInfoW(p_monitor, &minfo)) {
+		ERR_FAIL_V_MSG(0.0f, vformat("Failed to get monitor info for HMONITOR: 0x%llx", (intptr_t)p_monitor));
 	}
 
-	// Find this screen's path.
-	for (const DISPLAYCONFIG_PATH_INFO &path : data->paths) {
+	for (const DISPLAYCONFIG_PATH_INFO &path : p_paths) {
 		const Vector3i key = Vector3i((int32_t)path.sourceInfo.adapterId.HighPart, (int32_t)path.sourceInfo.adapterId.LowPart, (int32_t)path.sourceInfo.id);
 
 		DISPLAYCONFIG_SOURCE_DEVICE_NAME source_name;
@@ -1661,7 +1605,7 @@ static BOOL CALLBACK _MonitorEnumProcSdrWhiteLevel(HMONITOR hMonitor, HDC hdcMon
 
 		if (DisplayConfigGetDeviceInfo(&source_name.header) != ERROR_SUCCESS) {
 			if (!displays_with_white_level_error.has(key)) {
-				WARN_PRINT(vformat("Failed to get source name for screen: %d, adapterId: 0x%08X%08X, id: %d", data->screen, (uint32_t)path.sourceInfo.adapterId.HighPart, (uint32_t)path.sourceInfo.adapterId.LowPart, path.sourceInfo.id));
+				WARN_PRINT(vformat("Failed to get source name for adapterId: 0x%08X%08X, id: %d", (uint32_t)path.sourceInfo.adapterId.HighPart, (uint32_t)path.sourceInfo.adapterId.LowPart, path.sourceInfo.id));
 				displays_with_white_level_error.insert(key);
 			}
 			continue;
@@ -1671,7 +1615,6 @@ static BOOL CALLBACK _MonitorEnumProcSdrWhiteLevel(HMONITOR hMonitor, HDC hdcMon
 			continue;
 		}
 
-		// Query the SDR white level.
 		DISPLAYCONFIG_SDR_WHITE_LEVEL sdr_white_level;
 		memset(&sdr_white_level, 0, sizeof(sdr_white_level));
 		sdr_white_level.header.type = DISPLAYCONFIG_DEVICE_INFO_GET_SDR_WHITE_LEVEL;
@@ -1681,16 +1624,16 @@ static BOOL CALLBACK _MonitorEnumProcSdrWhiteLevel(HMONITOR hMonitor, HDC hdcMon
 
 		if (DisplayConfigGetDeviceInfo(&sdr_white_level.header) != ERROR_SUCCESS) {
 			if (!displays_with_white_level_error.has(key)) {
-				WARN_PRINT(vformat("Failed to get SDR white level for screen: %d, adapterId: 0x%08X%08X, id: %d", data->screen, (uint32_t)path.targetInfo.adapterId.HighPart, (uint32_t)path.targetInfo.adapterId.LowPart, path.targetInfo.id));
+				WARN_PRINT(vformat("Failed to get SDR white level for adapterId: 0x%08X%08X, id: %d", (uint32_t)path.targetInfo.adapterId.HighPart, (uint32_t)path.targetInfo.adapterId.LowPart, path.targetInfo.id));
 				displays_with_white_level_error.insert(key);
 			}
 			continue;
 		}
 
-		data->sdrWhiteLevelInNits = (float)sdr_white_level.SDRWhiteLevel / 1000.0f * 80.0f;
+		return (float)sdr_white_level.SDRWhiteLevel / 1000.0f * 80.0f;
 	}
 
-	return FALSE;
+	return 0.0f;
 }
 
 float DisplayServerWindows::screen_get_refresh_rate(int p_screen) const {
@@ -3324,55 +3267,93 @@ HWND DisplayServerWindows::_find_window_from_process_id(OS::ProcessID p_pid, HWN
 	return NULL;
 }
 
-float DisplayServerWindows::_screen_get_reference_luminance(int p_screen) const {
-	const float default_return = 0.0f;
-	p_screen = _get_screen_index(p_screen);
-	EnumSdrWhiteLevelData data = { Vector<DISPLAYCONFIG_PATH_INFO>(), Vector<DISPLAYCONFIG_MODE_INFO>(), 0, p_screen, default_return };
+// Build the HDR data cache for all screens in a single batched operation.
+// This queries all HMONITORs and DXGI output descriptors once, then populates
+// screen_hdr_cache with per-screen HDR capabilities, luminance, and SDR white levels.
+void DisplayServerWindows::_build_screen_hdr_cache() const {
+	screen_hdr_cache.clear();
+	screen_hdr_cache_valid = true;
 
+	// Pre-fetch all HMONITORs in a single EnumDisplayMonitors call.
+	LocalVector<HMONITOR> all_hmonitors;
+	_get_all_hmonitors(all_hmonitors);
+
+	// Pre-fetch display config paths in a single QueryDisplayConfig call.
+	LocalVector<DISPLAYCONFIG_PATH_INFO> paths;
+	LocalVector<DISPLAYCONFIG_MODE_INFO> modes;
 	uint32_t path_count = 0;
 	uint32_t mode_count = 0;
+	bool have_display_config = false;
 
-	if (GetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS, &path_count, &mode_count) != ERROR_SUCCESS) {
-		ERR_FAIL_V_MSG(0.0f, "Failed to get display config buffer sizes.");
+	if (GetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS, &path_count, &mode_count) == ERROR_SUCCESS) {
+		paths.resize(path_count);
+		modes.resize(mode_count);
+		if (QueryDisplayConfig(QDC_ONLY_ACTIVE_PATHS, &path_count, paths.ptr(), &mode_count, modes.ptr(), nullptr) == ERROR_SUCCESS) {
+			have_display_config = true;
+		}
 	}
 
-	data.paths.resize(path_count);
-	data.modes.resize(mode_count);
-
-	if (QueryDisplayConfig(QDC_ONLY_ACTIVE_PATHS, &path_count, data.paths.ptrw(), &mode_count, data.modes.ptrw(), nullptr) != ERROR_SUCCESS) {
-		ERR_FAIL_V_MSG(0.0f, "Failed to query display config.");
-	}
-
-	EnumDisplayMonitors(nullptr, nullptr, _MonitorEnumProcSdrWhiteLevel, (LPARAM)&data);
-	return data.sdrWhiteLevelInNits;
-}
-
-// Get screen HDR capabilities for internal use only.
-DisplayServerWindows::ScreenHdrData DisplayServerWindows::_get_screen_hdr_data(int p_screen) const {
-	ScreenHdrData data;
 #ifdef D3D12_ENABLED
-	HMONITOR monitor = _get_hmonitor_of_screen(p_screen);
-
-	// A dynamic cast is used here because the rendering context is not an Object and Object:cast is not supported.
+	// Build a map of HMONITOR -> DXGI_OUTPUT_DESC1 in a single pass through all adapters and outputs.
+	HashMap<HMONITOR, DXGI_OUTPUT_DESC1> dxgi_desc_map;
 	RenderingContextDriverD3D12 *rendering_context_d3d12 = dynamic_cast<RenderingContextDriverD3D12 *>(rendering_context);
 	if (rendering_context_d3d12) {
 		IDXGIFactory2 *dxgi_factory = rendering_context_d3d12->dxgi_factory_get();
+		if (dxgi_factory) {
+			Microsoft::WRL::ComPtr<IDXGIAdapter1> dxgi_adapter;
+			for (UINT adapter_idx = 0; dxgi_factory->EnumAdapters1(adapter_idx, &dxgi_adapter) == S_OK; adapter_idx++) {
+				Microsoft::WRL::ComPtr<IDXGIOutput> dxgi_output;
+				for (UINT output_idx = 0; dxgi_adapter->EnumOutputs(output_idx, &dxgi_output) != DXGI_ERROR_NOT_FOUND; output_idx++) {
+					Microsoft::WRL::ComPtr<IDXGIOutput6> output6;
+					if (SUCCEEDED(dxgi_output.As(&output6))) {
+						DXGI_OUTPUT_DESC1 desc1;
+						if (SUCCEEDED(output6->GetDesc1(&desc1))) {
+							dxgi_desc_map[desc1.Monitor] = desc1;
+						}
+					}
+				}
+			}
+		}
+	}
+#endif // D3D12_ENABLED
 
-		DXGI_OUTPUT_DESC1 desc;
-		if (_get_monitor_desc(monitor, dxgi_factory, desc)) {
+	// Build ScreenHdrData for each screen.
+	for (int i = 0; i < (int)all_hmonitors.size(); i++) {
+		ScreenHdrData data;
+		HMONITOR hmonitor = all_hmonitors[i];
+
+#ifdef D3D12_ENABLED
+		if (dxgi_desc_map.has(hmonitor)) {
+			const DXGI_OUTPUT_DESC1 &desc = dxgi_desc_map[hmonitor];
 			data.hdr_supported = desc.ColorSpace == DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020;
 			data.min_luminance = desc.MinLuminance;
 			data.max_luminance = desc.MaxLuminance;
 			data.max_average_luminance = desc.MaxFullFrameLuminance;
 		}
-	}
 #endif // D3D12_ENABLED
 
-	data.sdr_white_level = _screen_get_reference_luminance(p_screen);
-	return data;
+		if (have_display_config) {
+			data.sdr_white_level = _get_sdr_white_level_for_hmonitor(hmonitor, paths);
+		}
+
+		screen_hdr_cache[i] = data;
+	}
 }
 
-void DisplayServerWindows::_update_hdr_output_for_window(WindowID p_window, const WindowData &p_window_data, ScreenHdrData p_screen_data) {
+// Get screen HDR capabilities from cache, rebuilding it if necessary.
+DisplayServerWindows::ScreenHdrData DisplayServerWindows::_get_screen_hdr_data(int p_screen) const {
+	if (!screen_hdr_cache_valid) {
+		_build_screen_hdr_cache();
+	}
+
+	if (screen_hdr_cache.has(p_screen)) {
+		return screen_hdr_cache[p_screen];
+	}
+
+	return ScreenHdrData();
+}
+
+void DisplayServerWindows::_update_hdr_output_for_window(WindowID p_window, const WindowData &p_window_data, const ScreenHdrData &p_screen_data) {
 #ifdef RD_ENABLED
 	if (rendering_context) {
 		bool current_hdr_enabled = rendering_context->window_get_hdr_output_enabled(p_window);
@@ -3403,21 +3384,17 @@ void DisplayServerWindows::_update_hdr_output_for_window(WindowID p_window, cons
 }
 
 void DisplayServerWindows::_update_hdr_output_for_tracked_windows() {
-	hdr_output_cache.clear();
+	// Invalidate cache so it gets rebuilt with fresh data this frame.
+	screen_hdr_cache_valid = false;
+
 	for (const KeyValue<WindowID, WindowData> &E : windows) {
-		if (E.value.hdr_output_requested) {
-			int screen = window_get_current_screen(E.key);
-
-			ScreenHdrData data;
-			if (!hdr_output_cache.has(screen)) {
-				data = _get_screen_hdr_data(screen);
-				hdr_output_cache.insert(screen, data);
-			} else {
-				data = hdr_output_cache[screen];
-			}
-
-			_update_hdr_output_for_window(E.key, E.value, data);
+		if (!E.value.hdr_output_requested) {
+			continue;
 		}
+
+		int screen = window_get_current_screen(E.key);
+		ScreenHdrData data = _get_screen_hdr_data(screen);
+		_update_hdr_output_for_window(E.key, E.value, data);
 	}
 }
 

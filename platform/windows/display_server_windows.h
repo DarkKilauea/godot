@@ -552,11 +552,14 @@ class DisplayServerWindows : public DisplayServer {
 		float max_average_luminance = 0.0f;
 		float sdr_white_level = 0.0f;
 	};
-	AHashMap<int, ScreenHdrData> hdr_output_cache;
 
-	float _screen_get_reference_luminance(int p_screen) const;
+	// HDR data cache is rebuilt lazily and invalidated once per frame.
+	mutable AHashMap<int, ScreenHdrData> screen_hdr_cache;
+	mutable bool screen_hdr_cache_valid = false;
+
+	void _build_screen_hdr_cache() const;
 	ScreenHdrData _get_screen_hdr_data(int p_screen) const;
-	void _update_hdr_output_for_window(WindowID p_window, const WindowData &p_window_data, ScreenHdrData p_screen_data);
+	void _update_hdr_output_for_window(WindowID p_window, const WindowData &p_window_data, const ScreenHdrData &p_screen_data);
 	void _update_hdr_output_for_tracked_windows();
 
 public:
