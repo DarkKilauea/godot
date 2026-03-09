@@ -108,6 +108,11 @@ private:
 	static Error _msg_rq_screenshot(const Array &p_args);
 	static Error _msg_report_window_focused(const Array &p_args);
 
+	static Error _msg_hdr_set_enabled(const Array &p_args);
+	static Error _msg_hdr_set_reference_luminance(const Array &p_args);
+	static Error _msg_hdr_set_max_luminance(const Array &p_args);
+	static Error _msg_hdr_request_state(const Array &p_args);
+
 	static Error _msg_runtime_node_select_reset_camera_2d(const Array &p_args);
 	static Error _msg_transform_camera_2d(const Array &p_args);
 #ifndef _3D_DISABLED

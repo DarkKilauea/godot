@@ -43,6 +43,7 @@
 #include "editor/editor_node.h"
 #include "editor/editor_string_names.h"
 #include "editor/gui/editor_bottom_panel.h"
+#include "editor/gui/editor_spin_slider.h"
 #include "editor/gui/window_wrapper.h"
 #include "editor/run/editor_run_bar.h"
 #include "editor/run/embedded_process.h"
@@ -51,10 +52,12 @@
 #include "editor/settings/editor_settings.h"
 #include "editor/themes/editor_scale.h"
 #include "scene/gui/button.h"
+#include "scene/gui/check_box.h"
 #include "scene/gui/flow_container.h"
 #include "scene/gui/label.h"
 #include "scene/gui/menu_button.h"
 #include "scene/gui/panel.h"
+#include "scene/gui/popup.h"
 #include "scene/gui/separator.h"
 #include "scene/main/scene_tree.h"
 #include "servers/display/display_server.h"
@@ -150,6 +153,8 @@ void GameViewDebugger::_session_started(Ref<EditorDebuggerSession> p_session) {
 	shortcut_settings["editor/next_frame_embedded_project"] = DebuggerMarshalls::serialize_key_shortcut(ED_GET_SHORTCUT("editor/next_frame_embedded_project"));
 
 	p_session->send_message("scene:setup_embedded_shortcuts", { shortcut_settings });
+
+	p_session->send_message("scene:hdr_request_state", Array());
 
 	emit_signal(SNAME("session_started"));
 }
@@ -273,6 +278,47 @@ void GameViewDebugger::set_debug_mute_audio(bool p_enabled) {
 	EditorDebuggerNode::get_singleton()->set_debug_mute_audio(p_enabled);
 }
 
+void GameViewDebugger::set_hdr_enabled(bool p_enabled) {
+	Array message;
+	message.append(p_enabled);
+
+	for (Ref<EditorDebuggerSession> &I : sessions) {
+		if (I->is_active()) {
+			I->send_message("scene:hdr_set_enabled", message);
+		}
+	}
+}
+
+void GameViewDebugger::set_hdr_reference_luminance(float p_luminance) {
+	Array message;
+	message.append(p_luminance);
+
+	for (Ref<EditorDebuggerSession> &I : sessions) {
+		if (I->is_active()) {
+			I->send_message("scene:hdr_set_reference_luminance", message);
+		}
+	}
+}
+
+void GameViewDebugger::set_hdr_max_luminance(float p_luminance) {
+	Array message;
+	message.append(p_luminance);
+
+	for (Ref<EditorDebuggerSession> &I : sessions) {
+		if (I->is_active()) {
+			I->send_message("scene:hdr_set_max_luminance", message);
+		}
+	}
+}
+
+void GameViewDebugger::request_hdr_state() {
+	for (Ref<EditorDebuggerSession> &I : sessions) {
+		if (I->is_active()) {
+			I->send_message("scene:hdr_request_state", Array());
+		}
+	}
+}
+
 void GameViewDebugger::set_camera_override(bool p_enabled) {
 	EditorDebuggerNode::get_singleton()->set_camera_override(p_enabled ? camera_override_mode : EditorDebuggerNode::OVERRIDE_NONE);
 }
@@ -330,6 +376,7 @@ void GameViewDebugger::_feature_profile_changed() {
 void GameViewDebugger::_bind_methods() {
 	ADD_SIGNAL(MethodInfo("session_started"));
 	ADD_SIGNAL(MethodInfo("session_stopped"));
+	ADD_SIGNAL(MethodInfo("hdr_state_received", PropertyInfo(Variant::ARRAY, "state")));
 }
 
 bool GameViewDebugger::add_screenshot_callback(const Callable &p_callaback, const Rect2i &p_rect) {
@@ -374,6 +421,9 @@ bool GameViewDebugger::capture(const String &p_message, const Array &p_data, int
 
 	if (p_message == "game_view:get_screenshot") {
 		return _msg_get_screenshot(p_data);
+	} else if (p_message == "game_view:hdr_state") {
+		emit_signal(SNAME("hdr_state_received"), p_data);
+		return true;
 	} else {
 		// Any other messages with this prefix should be ignored.
 		WARN_PRINT("GameViewDebugger unknown message: " + p_message);
@@ -866,6 +916,7 @@ void GameView::_update_ui() {
 	}
 
 	game_size_label->set_visible(show_game_size);
+	hdr_options_button->set_visible(show_game_size);
 }
 
 void GameView::_update_embed_menu_options() {
@@ -917,6 +968,89 @@ void GameView::_debug_mute_audio_button_pressed() {
 	debug_mute_audio_button->set_button_icon(get_editor_theme_icon(debug_mute_audio ? SNAME("AudioMute") : SNAME("AudioStreamPlayer")));
 	debug_mute_audio_button->set_tooltip_text(debug_mute_audio ? TTRC("Unmute game audio.") : TTRC("Mute game audio."));
 	debugger->set_debug_mute_audio(debug_mute_audio);
+}
+
+void GameView::_hdr_options_button_pressed() {
+	debugger->request_hdr_state();
+
+	Rect2 button_rect = hdr_options_button->get_global_rect();
+	Vector2 popup_pos = Vector2(button_rect.position.x, button_rect.position.y + button_rect.size.y);
+	hdr_popup->set_position(popup_pos);
+	hdr_popup->popup();
+}
+
+void GameView::_hdr_enabled_toggled(bool p_pressed) {
+	debugger->set_hdr_enabled(p_pressed);
+	debugger->request_hdr_state();
+}
+
+void GameView::_hdr_reference_auto_toggled(bool p_pressed) {
+	if (p_pressed) {
+		// Switching to auto: send -1.
+		debugger->set_hdr_reference_luminance(-1.0f);
+	} else {
+		// Switching to manual: apply whatever the current auto value was.
+		debugger->set_hdr_reference_luminance(hdr_cached_current_reference);
+		hdr_reference_luminance_slider->set_value_no_signal(hdr_cached_current_reference);
+	}
+	hdr_reference_luminance_slider->set_read_only(p_pressed);
+	debugger->request_hdr_state();
+}
+
+void GameView::_hdr_reference_luminance_changed(double p_value) {
+	debugger->set_hdr_reference_luminance((float)p_value);
+	debugger->request_hdr_state();
+}
+
+void GameView::_hdr_max_auto_toggled(bool p_pressed) {
+	if (p_pressed) {
+		// Switching to auto: send -1.
+		debugger->set_hdr_max_luminance(-1.0f);
+	} else {
+		// Switching to manual: apply whatever the current auto value was.
+		debugger->set_hdr_max_luminance(hdr_cached_current_max);
+		hdr_max_luminance_slider->set_value_no_signal(hdr_cached_current_max);
+	}
+	hdr_max_luminance_slider->set_read_only(p_pressed);
+	debugger->request_hdr_state();
+}
+
+void GameView::_hdr_max_luminance_changed(double p_value) {
+	debugger->set_hdr_max_luminance((float)p_value);
+	debugger->request_hdr_state();
+}
+
+void GameView::_hdr_state_received(const Array &p_state) {
+	if (p_state.size() < 8) {
+		return;
+	}
+
+	bool supported = p_state[0];
+	bool requested = p_state[1];
+	float reference_luminance = p_state[3];
+	float current_reference_luminance = p_state[4];
+	float max_luminance = p_state[5];
+	float current_max_luminance = p_state[6];
+	float max_color_value = p_state[7];
+
+	hdr_cached_current_reference = current_reference_luminance;
+	hdr_cached_current_max = current_max_luminance;
+
+	hdr_enabled_check->set_pressed_no_signal(requested);
+	hdr_enabled_check->set_disabled(!supported);
+
+	bool ref_is_auto = reference_luminance < 0.0f;
+	hdr_reference_auto_check->set_pressed_no_signal(ref_is_auto);
+	hdr_reference_luminance_slider->set_read_only(ref_is_auto);
+	hdr_reference_luminance_slider->set_value_no_signal(ref_is_auto ? current_reference_luminance : reference_luminance);
+
+	bool max_is_auto = max_luminance < 0.0f;
+	hdr_max_auto_check->set_pressed_no_signal(max_is_auto);
+	hdr_max_luminance_slider->set_read_only(max_is_auto);
+	hdr_max_luminance_slider->set_value_no_signal(max_is_auto ? current_max_luminance : max_luminance);
+
+	hdr_supported_label->set_text(vformat(TTRC("Supported: %s"), supported ? TTRC("Yes") : TTRC("No")));
+	hdr_max_color_value_label->set_text(vformat(TTRC("Max Color Value: %.2f"), max_color_value));
 }
 
 void GameView::_camera_override_button_toggled(bool p_pressed) {
@@ -985,6 +1119,8 @@ void GameView::_notification(int p_what) {
 			hide_selection->set_button_icon(get_editor_theme_icon(hide_selection->is_pressed() ? SNAME("GuiVisibilityHidden") : SNAME("GuiVisibilityVisible")));
 			selection_options_menu->set_button_icon(get_editor_theme_icon(SNAME("GuiTabMenuHl")));
 			embed_options_menu->set_button_icon(get_editor_theme_icon(SNAME("KeepAspect")));
+
+			hdr_options_button->set_button_icon(get_editor_theme_icon(SNAME("GuiTabMenuHl")));
 
 			debug_mute_audio_button->set_button_icon(get_editor_theme_icon(debug_mute_audio ? SNAME("AudioMute") : SNAME("AudioStreamPlayer")));
 
@@ -1484,6 +1620,75 @@ GameView::GameView(Ref<GameViewDebugger> p_debugger, EmbeddedProcessBase *p_embe
 	game_size_label->set_h_size_flags(SIZE_EXPAND_FILL);
 	game_size_label->set_horizontal_alignment(HorizontalAlignment::HORIZONTAL_ALIGNMENT_RIGHT);
 
+	hdr_options_button = memnew(Button);
+	embedding_hb->add_child(hdr_options_button);
+	hdr_options_button->set_theme_type_variation(SceneStringName(FlatButton));
+	hdr_options_button->set_tooltip_text(TTRC("HDR Output Settings"));
+	hdr_options_button->set_accessibility_name(TTRC("HDR Output Settings"));
+	hdr_options_button->connect(SceneStringName(pressed), callable_mp(this, &GameView::_hdr_options_button_pressed));
+
+	hdr_popup = memnew(PopupPanel);
+	add_child(hdr_popup);
+	hdr_popup->set_wrap_controls(true);
+
+	VBoxContainer *hdr_vb = memnew(VBoxContainer);
+	hdr_popup->add_child(hdr_vb);
+	hdr_vb->set_custom_minimum_size(Size2(280 * EDSCALE, 0));
+
+	Label *hdr_title = memnew(Label);
+	hdr_vb->add_child(hdr_title);
+	hdr_title->set_text(TTRC("HDR Output"));
+	hdr_title->set_theme_type_variation("HeaderSmall");
+
+	hdr_enabled_check = memnew(CheckBox);
+	hdr_vb->add_child(hdr_enabled_check);
+	hdr_enabled_check->set_text(TTRC("HDR Enabled"));
+	hdr_enabled_check->connect(SceneStringName(toggled), callable_mp(this, &GameView::_hdr_enabled_toggled));
+
+	hdr_reference_auto_check = memnew(CheckBox);
+	hdr_vb->add_child(hdr_reference_auto_check);
+	hdr_reference_auto_check->set_text(TTRC("Auto Reference Luminance"));
+	hdr_reference_auto_check->set_pressed(true);
+	hdr_reference_auto_check->connect(SceneStringName(toggled), callable_mp(this, &GameView::_hdr_reference_auto_toggled));
+
+	hdr_reference_luminance_slider = memnew(EditorSpinSlider);
+	hdr_vb->add_child(hdr_reference_luminance_slider);
+	hdr_reference_luminance_slider->set_label(TTRC("Reference"));
+	hdr_reference_luminance_slider->set_suffix("nits");
+	hdr_reference_luminance_slider->set_min(1.0);
+	hdr_reference_luminance_slider->set_max(1000.0);
+	hdr_reference_luminance_slider->set_step(1.0);
+	hdr_reference_luminance_slider->set_value(80.0);
+	hdr_reference_luminance_slider->set_read_only(true);
+	hdr_reference_luminance_slider->connect("value_changed", callable_mp(this, &GameView::_hdr_reference_luminance_changed));
+
+	hdr_max_auto_check = memnew(CheckBox);
+	hdr_vb->add_child(hdr_max_auto_check);
+	hdr_max_auto_check->set_text(TTRC("Auto Max Luminance"));
+	hdr_max_auto_check->set_pressed(true);
+	hdr_max_auto_check->connect(SceneStringName(toggled), callable_mp(this, &GameView::_hdr_max_auto_toggled));
+
+	hdr_max_luminance_slider = memnew(EditorSpinSlider);
+	hdr_vb->add_child(hdr_max_luminance_slider);
+	hdr_max_luminance_slider->set_label(TTRC("Max"));
+	hdr_max_luminance_slider->set_suffix("nits");
+	hdr_max_luminance_slider->set_min(1.0);
+	hdr_max_luminance_slider->set_max(10000.0);
+	hdr_max_luminance_slider->set_step(1.0);
+	hdr_max_luminance_slider->set_value(1000.0);
+	hdr_max_luminance_slider->set_read_only(true);
+	hdr_max_luminance_slider->connect("value_changed", callable_mp(this, &GameView::_hdr_max_luminance_changed));
+
+	hdr_vb->add_child(memnew(HSeparator));
+
+	hdr_supported_label = memnew(Label);
+	hdr_vb->add_child(hdr_supported_label);
+	hdr_supported_label->set_text(TTRC("Supported: N/A"));
+
+	hdr_max_color_value_label = memnew(Label);
+	hdr_vb->add_child(hdr_max_color_value_label);
+	hdr_max_color_value_label->set_text(TTRC("Max Color Value: N/A"));
+
 	panel = memnew(Panel);
 	add_child(panel);
 	panel->set_theme_type_variation("GamePanel");
@@ -1517,6 +1722,7 @@ GameView::GameView(Ref<GameViewDebugger> p_debugger, EmbeddedProcessBase *p_embe
 
 	p_debugger->connect("session_started", callable_mp(this, &GameView::_sessions_changed));
 	p_debugger->connect("session_stopped", callable_mp(this, &GameView::_sessions_changed));
+	p_debugger->connect("hdr_state_received", callable_mp(this, &GameView::_hdr_state_received));
 
 	p_wrapper->set_override_close_request(true);
 	p_wrapper->connect("window_close_requested", callable_mp(this, &GameView::_window_close_request));
