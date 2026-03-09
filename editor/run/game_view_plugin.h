@@ -37,7 +37,10 @@
 #include "scene/debugger/runtime_node_select.h"
 #include "scene/gui/box_container.h"
 
+class CheckBox;
+class EditorSpinSlider;
 class EmbeddedProcessBase;
+class PopupPanel;
 class VSeparator;
 class WindowWrapper;
 class ScriptEditorDebugger;
@@ -97,6 +100,11 @@ public:
 	void set_selection_prefer_group(bool p_enabled);
 
 	void set_debug_mute_audio(bool p_enabled);
+
+	void set_hdr_enabled(bool p_enabled);
+	void set_hdr_reference_luminance(float p_luminance);
+	void set_hdr_max_luminance(float p_luminance);
+	void request_hdr_state();
 
 	void set_camera_override(bool p_enabled);
 	void set_camera_manipulate_mode(EditorDebuggerNode::CameraOverride p_mode);
@@ -183,6 +191,17 @@ class GameView : public VBoxContainer {
 	HBoxContainer *embedding_hb = nullptr;
 	MenuButton *embed_options_menu = nullptr;
 	Label *game_size_label = nullptr;
+	Button *hdr_options_button = nullptr;
+	PopupPanel *hdr_popup = nullptr;
+	CheckBox *hdr_enabled_check = nullptr;
+	CheckBox *hdr_reference_auto_check = nullptr;
+	EditorSpinSlider *hdr_reference_luminance_slider = nullptr;
+	CheckBox *hdr_max_auto_check = nullptr;
+	EditorSpinSlider *hdr_max_luminance_slider = nullptr;
+	Label *hdr_max_color_value_label = nullptr;
+	Label *hdr_supported_label = nullptr;
+	float hdr_cached_current_reference = 0.0f;
+	float hdr_cached_current_max = 0.0f;
 	Panel *panel = nullptr;
 	EmbeddedProcessBase *embedded_process = nullptr;
 	Label *state_label = nullptr;
@@ -236,6 +255,14 @@ class GameView : public VBoxContainer {
 	void _hide_selection_toggled(bool p_pressed);
 
 	void _debug_mute_audio_button_pressed();
+
+	void _hdr_options_button_pressed();
+	void _hdr_enabled_toggled(bool p_pressed);
+	void _hdr_reference_auto_toggled(bool p_pressed);
+	void _hdr_reference_luminance_changed(double p_value);
+	void _hdr_max_auto_toggled(bool p_pressed);
+	void _hdr_max_luminance_changed(double p_value);
+	void _hdr_state_received(const Array &p_state);
 
 	void _camera_override_button_toggled(bool p_pressed);
 	void _camera_override_menu_id_pressed(int p_id);

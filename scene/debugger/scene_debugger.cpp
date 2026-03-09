@@ -52,6 +52,7 @@
 #include "scene/main/window.h" // SceneTree:get_root()
 #include "scene/resources/packed_scene.h"
 #include "servers/audio/audio_server.h"
+#include "servers/display/display_server.h"
 #include "servers/rendering/rendering_server.h"
 
 #ifndef _3D_DISABLED
@@ -215,6 +216,44 @@ Error SceneDebugger::_msg_debug_mute_audio(const Array &p_args) {
 	ERR_FAIL_COND_V(p_args.is_empty(), ERR_INVALID_DATA);
 	bool do_mute = p_args[0];
 	AudioServer::get_singleton()->set_debug_mute(do_mute);
+	return OK;
+}
+
+Error SceneDebugger::_msg_hdr_set_enabled(const Array &p_args) {
+	ERR_FAIL_COND_V(p_args.is_empty(), ERR_INVALID_DATA);
+	bool enable = p_args[0];
+	DisplayServer::get_singleton()->window_request_hdr_output(enable);
+	return OK;
+}
+
+Error SceneDebugger::_msg_hdr_set_reference_luminance(const Array &p_args) {
+	ERR_FAIL_COND_V(p_args.is_empty(), ERR_INVALID_DATA);
+	float luminance = p_args[0];
+	DisplayServer::get_singleton()->window_set_hdr_output_reference_luminance(luminance);
+	return OK;
+}
+
+Error SceneDebugger::_msg_hdr_set_max_luminance(const Array &p_args) {
+	ERR_FAIL_COND_V(p_args.is_empty(), ERR_INVALID_DATA);
+	float luminance = p_args[0];
+	DisplayServer::get_singleton()->window_set_hdr_output_max_luminance(luminance);
+	return OK;
+}
+
+Error SceneDebugger::_msg_hdr_request_state(const Array &p_args) {
+	DisplayServer *ds = DisplayServer::get_singleton();
+
+	Array state;
+	state.append(ds->window_is_hdr_output_supported());
+	state.append(ds->window_is_hdr_output_requested());
+	state.append(ds->window_is_hdr_output_enabled());
+	state.append(ds->window_get_hdr_output_reference_luminance());
+	state.append(ds->window_get_hdr_output_current_reference_luminance());
+	state.append(ds->window_get_hdr_output_max_luminance());
+	state.append(ds->window_get_hdr_output_current_max_luminance());
+	state.append(ds->window_get_output_max_linear_value());
+
+	EngineDebugger::get_singleton()->send_message("game_view:hdr_state", state);
 	return OK;
 }
 
@@ -560,6 +599,10 @@ void SceneDebugger::_init_message_handlers() {
 	message_handlers["next_frame"] = _msg_next_frame;
 	message_handlers["speed_changed"] = _msg_speed_changed;
 	message_handlers["debug_mute_audio"] = _msg_debug_mute_audio;
+	message_handlers["hdr_set_enabled"] = _msg_hdr_set_enabled;
+	message_handlers["hdr_set_reference_luminance"] = _msg_hdr_set_reference_luminance;
+	message_handlers["hdr_set_max_luminance"] = _msg_hdr_set_max_luminance;
+	message_handlers["hdr_request_state"] = _msg_hdr_request_state;
 	message_handlers["override_cameras"] = _msg_override_cameras;
 	message_handlers["transform_camera_2d"] = _msg_transform_camera_2d;
 #ifndef _3D_DISABLED
