@@ -1743,7 +1743,7 @@ ProjectSettings::ProjectSettings() {
 
 	GLOBAL_DEF_BASIC("display/window/hdr/request_hdr_output", false);
 	GLOBAL_DEF("display/window/hdr/max_output_value", 0.0f);
-	GLOBAL_DEF("display/window/hdr/max_output_value.android", 4.0f);
+	GLOBAL_DEF("display/window/hdr/max_output_value.android", 12.0f);
 
 	GLOBAL_DEF("display/window/energy_saving/keep_screen_on", true);
 	GLOBAL_DEF("animation/warnings/check_invalid_skeleton_modifier_node_paths", true);

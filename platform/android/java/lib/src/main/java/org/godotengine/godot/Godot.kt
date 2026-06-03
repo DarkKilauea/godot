@@ -725,6 +725,7 @@ class Godot private constructor(val context: Context) {
 					{ runnable -> runOnHostThread(runnable) },
 					hdrSdrRatioListener
 				)
+				GodotLib.onHdrSdrRatioChanged(display.hdrSdrRatio)
 			}
 		}
 	}

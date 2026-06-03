@@ -279,7 +279,7 @@ public:
 	void reset_window();
 	void notify_surface_changed(int p_width, int p_height);
 	void notify_application_paused();
-	void notify_hdr_changed();
+	void notify_hdr_changed(float p_hdr_sdr_ratio = -1.0f);
 
 	virtual Point2i mouse_get_position() const override;
 	virtual BitField<MouseButtonMask> mouse_get_button_state() const override;

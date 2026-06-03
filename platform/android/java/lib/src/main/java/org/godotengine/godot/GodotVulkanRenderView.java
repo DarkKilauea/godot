@@ -229,9 +229,16 @@ class GodotVulkanRenderView extends VkSurfaceView implements GodotRenderView {
 	@Keep
 	@Override
 	public void requestMaxHdrHeadroom(float desiredHeadroom) {
-		if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.VANILLA_ICE_CREAM) {
+		if (Build.VERSION.SDK_INT < Build.VERSION_CODES.VANILLA_ICE_CREAM) {
+			return;
+		}
+		// setDesiredHdrHeadroom must be called on the main thread, but the
+		// renderer invokes us from the VkThread. Display server already
+		// only invokes us on actual HDR enable/disable transitions, so
+		// per-frame thrashing of the SurfaceView is not a concern.
+		post(() -> {
 			getView().setDesiredHdrHeadroom(desiredHeadroom);
 			Log.v("GodotVulkanRenderView", "requestMaxHdrHeadroom: " + desiredHeadroom);
-		}
+		});
 	}
 }

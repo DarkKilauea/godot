@@ -988,7 +988,7 @@
 			Maximum value for HDR output in multiples of the reference luminance. If [code]0.0[/code], the screen's maximum brightness will be used.
 			[b]Note:[/b] This setting is only implemented on Android. On other platforms, the display's maximum brightness is always used for HDR output, and this setting is ignored.
 		</member>
-		<member name="display/window/hdr/max_output_value.android" type="float" setter="" getter="" default="4.0">
+		<member name="display/window/hdr/max_output_value.android" type="float" setter="" getter="" default="12.0">
 			Android override for [member display/window/hdr/max_output_value]. Lower values may help conserve battery life on mobile devices.
 		</member>
 		<member name="display/window/hdr/request_hdr_output" type="bool" setter="" getter="" default="false">

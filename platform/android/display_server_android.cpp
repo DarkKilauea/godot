@@ -47,6 +47,7 @@
 
 #if defined(VULKAN_ENABLED)
 #include "rendering_context_driver_vulkan_android.h"
+#include "vulkan_hdr_swap_chain.h"
 #endif
 #endif
 
@@ -474,45 +475,68 @@ void DisplayServerAndroid::_update_hdr_output(const AndroidHdrCapabilities &p_hd
 		bool current_hdr_enabled = rendering_context_global->window_get_hdr_output_enabled(p_window);
 		bool desired_hdr_enabled = hdr_output_requested && p_hdr_capabilities.hdr_supported;
 		const float hdr_ratio_limit = MAX(float(GLOBAL_GET("display/window/hdr/max_output_value")), 0.0f);
-
-		float sdr_reference = 100.0f;
-		float max_reference = p_hdr_capabilities.max_luminance;
-		if (p_hdr_capabilities.hdr_sdr_ratio > 1.0f) {
-			// hdr_sdr_ratio is defined as targetHdrPeakBrightnessInNits / targetSdrWhitePointInNits
-			sdr_reference = p_hdr_capabilities.max_luminance / p_hdr_capabilities.hdr_sdr_ratio;
-
-			// Recompute max limit based on current HDR ratio.
-			max_reference = sdr_reference * MAX(p_hdr_capabilities.hdr_sdr_ratio, hdr_ratio_limit);
-		}
+		bool ahb_presenter_supported = false;
+#if defined(VULKAN_ENABLED)
+		ahb_presenter_supported = VulkanHDRSwapChain::is_supported();
+#endif
 
 		if (current_hdr_enabled != desired_hdr_enabled) {
 			rendering_context_global->window_set_hdr_output_enabled(p_window, desired_hdr_enabled);
-			rendering_context_global->window_set_hdr_output_linear_luminance_scale(p_window, sdr_reference);
+		}
 
+		if (!desired_hdr_enabled) {
+			if (!ahb_presenter_supported) {
+				GodotJavaViewWrapper *view = OS_Android::get_singleton()->get_godot_java()->get_godot_view();
+				ERR_FAIL_NULL(view);
+				view->request_max_hdr_headroom(1.0f);
+			}
+			return;
+		}
+
+		const bool manual_luminance = hdr_output_reference_luminance >= 0.0f || hdr_output_max_luminance >= 0.0f;
+		float reference_luminance = 0.0f;
+		float max_luminance = 0.0f;
+		float linear_luminance_scale = ahb_presenter_supported ? 80.0f : 100.0f;
+
+		if (manual_luminance) {
+			reference_luminance = hdr_output_reference_luminance >= 0.0f ? hdr_output_reference_luminance : rendering_context_global->window_get_hdr_output_reference_luminance(p_window);
+			max_luminance = hdr_output_max_luminance >= 0.0f ? hdr_output_max_luminance : rendering_context_global->window_get_hdr_output_max_luminance(p_window);
+			if (reference_luminance <= 0.0f) {
+				reference_luminance = linear_luminance_scale;
+			}
+			if (max_luminance < reference_luminance) {
+				max_luminance = reference_luminance;
+			}
+		} else if (ahb_presenter_supported) {
+			reference_luminance = 80.0f;
+			const float static_hdr_ratio = p_hdr_capabilities.max_luminance > 0.0f ? MAX(p_hdr_capabilities.max_luminance / reference_luminance, 1.0f) : 1.0f;
+			const float hdr_ratio = p_hdr_capabilities.hdr_sdr_ratio > 1.0f ? p_hdr_capabilities.hdr_sdr_ratio : static_hdr_ratio;
+			const float capped_hdr_ratio = hdr_ratio_limit > 0.0f ? MIN(hdr_ratio, hdr_ratio_limit) : hdr_ratio;
+			max_luminance = reference_luminance * capped_hdr_ratio;
+		} else if (p_hdr_capabilities.hdr_sdr_ratio > 1.0f) {
+			// hdr_sdr_ratio is defined as targetHdrPeakBrightnessInNits / targetSdrWhitePointInNits.
+			reference_luminance = p_hdr_capabilities.max_luminance / p_hdr_capabilities.hdr_sdr_ratio;
+			const float capped_hdr_ratio = hdr_ratio_limit > 0.0f ? MIN(p_hdr_capabilities.hdr_sdr_ratio, hdr_ratio_limit) : p_hdr_capabilities.hdr_sdr_ratio;
+			max_luminance = reference_luminance * capped_hdr_ratio;
+			linear_luminance_scale = reference_luminance;
+		} else {
+			reference_luminance = 100.0f;
+			max_luminance = reference_luminance;
+			linear_luminance_scale = reference_luminance;
+		}
+
+		rendering_context_global->window_set_hdr_output_linear_luminance_scale(p_window, linear_luminance_scale);
+		rendering_context_global->window_set_hdr_output_reference_luminance(p_window, reference_luminance);
+		rendering_context_global->window_set_hdr_output_max_luminance(p_window, max_luminance);
+
+		// On the AHB presenter path (Android 16+) we manage HDR headroom
+		// exclusively on our child SurfaceControl via per-frame
+		// setExtendedRangeBrightness calls.
+		if (!ahb_presenter_supported) {
 			GodotJavaViewWrapper *view = OS_Android::get_singleton()->get_godot_java()->get_godot_view();
 			if (view) {
-				if (desired_hdr_enabled) {
-					view->request_max_hdr_headroom(hdr_ratio_limit);
-				} else {
-					view->request_max_hdr_headroom(1.0f);
-				}
+				view->request_max_hdr_headroom(max_luminance / MAX(reference_luminance, 1.0f));
 			}
-		}
-
-		// If auto reference luminance is enabled, update it based on the current SDR white level.
-		if (hdr_output_reference_luminance < 0.0f) {
-			if (sdr_reference > 0.0f) {
-				rendering_context_global->window_set_hdr_output_reference_luminance(p_window, sdr_reference);
-			}
-			// If we cannot get the SDR white level, leave the previous value unchanged.
-		}
-
-		// If auto max luminance is enabled, update it based on the screen's max luminance.
-		if (hdr_output_max_luminance < 0.0f) {
-			if (max_reference > 0.0f) {
-				rendering_context_global->window_set_hdr_output_max_luminance(p_window, max_reference);
-			}
-			// If we cannot get the screen's max luminance, leave the previous value unchanged.
 		}
 	}
 #endif // RD_ENABLED
@@ -751,21 +775,10 @@ void DisplayServerAndroid::window_set_hdr_output_reference_luminance(const float
 
 	hdr_output_reference_luminance = p_reference_luminance;
 
-	// Negative luminance means auto-adjust
-	if (hdr_output_reference_luminance < 0.0f) {
-		GodotJavaWrapper *godot_java = OS_Android::get_singleton()->get_godot_java();
-		ERR_FAIL_NULL(godot_java);
-		AndroidHdrCapabilities data = godot_java->get_hdr_capabilities();
-
-		_update_hdr_output(data, p_window);
-	} else {
-		// Otherwise, apply the requested luminance
-#if defined(RD_ENABLED)
-		if (rendering_context_global) {
-			rendering_context_global->window_set_hdr_output_reference_luminance(p_window, p_reference_luminance);
-		}
-#endif
-	}
+	GodotJavaWrapper *godot_java = OS_Android::get_singleton()->get_godot_java();
+	ERR_FAIL_NULL(godot_java);
+	AndroidHdrCapabilities data = godot_java->get_hdr_capabilities();
+	_update_hdr_output(data, p_window);
 }
 
 float DisplayServerAndroid::window_get_hdr_output_reference_luminance(DisplayServerEnums::WindowID p_window) const {
@@ -789,21 +802,10 @@ void DisplayServerAndroid::window_set_hdr_output_max_luminance(const float p_max
 
 	hdr_output_max_luminance = p_max_luminance;
 
-	// Negative luminance means auto-adjust
-	if (hdr_output_max_luminance < 0.0f) {
-		GodotJavaWrapper *godot_java = OS_Android::get_singleton()->get_godot_java();
-		ERR_FAIL_NULL(godot_java);
-		AndroidHdrCapabilities data = godot_java->get_hdr_capabilities();
-
-		_update_hdr_output(data, p_window);
-	} else {
-		// Otherwise, apply the requested luminance
-#if defined(RD_ENABLED)
-		if (rendering_context_global) {
-			rendering_context_global->window_set_hdr_output_max_luminance(p_window, p_max_luminance);
-		}
-#endif
-	}
+	GodotJavaWrapper *godot_java = OS_Android::get_singleton()->get_godot_java();
+	ERR_FAIL_NULL(godot_java);
+	AndroidHdrCapabilities data = godot_java->get_hdr_capabilities();
+	_update_hdr_output(data, p_window);
 }
 
 float DisplayServerAndroid::window_get_hdr_output_max_luminance(DisplayServerEnums::WindowID p_window) const {
@@ -946,6 +948,8 @@ void DisplayServerAndroid::reset_window() {
 		if (rendering_device) {
 			rendering_device->screen_create(DisplayServerEnums::MAIN_WINDOW_ID);
 		}
+
+		notify_hdr_changed();
 	}
 #endif
 }
@@ -964,11 +968,14 @@ void DisplayServerAndroid::notify_application_paused() {
 #endif // defined(RD_ENABLED)
 }
 
-void DisplayServerAndroid::notify_hdr_changed() {
+void DisplayServerAndroid::notify_hdr_changed(float p_hdr_sdr_ratio) {
 	if (hdr_output_requested) {
 		GodotJavaWrapper *godot_java = OS_Android::get_singleton()->get_godot_java();
 		ERR_FAIL_NULL(godot_java);
 		AndroidHdrCapabilities data = godot_java->get_hdr_capabilities();
+		if (p_hdr_sdr_ratio > 0.0f) {
+			data.hdr_sdr_ratio = p_hdr_sdr_ratio;
+		}
 
 		_update_hdr_output(data, DisplayServerEnums::MAIN_WINDOW_ID);
 	}

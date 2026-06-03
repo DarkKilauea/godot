@@ -257,7 +257,7 @@ JNIEXPORT void JNICALL Java_org_godotengine_godot_GodotLib_onHdrSdrRatioChanged(
 		return;
 	}
 
-	DisplayServerAndroid::get_singleton()->notify_hdr_changed();
+	DisplayServerAndroid::get_singleton()->notify_hdr_changed(p_ratio);
 }
 
 JNIEXPORT void JNICALL Java_org_godotengine_godot_GodotLib_newcontext(JNIEnv *env, jclass clazz, jobject p_surface) {
