@@ -46,6 +46,14 @@
 #include <thirdparty/swappy-frame-pacing/swappyVk.h>
 #endif
 
+#ifdef ANDROID_ENABLED
+#include "platform/android/os_android.h"
+#include "platform/android/vulkan_hdr_swap_chain.h"
+
+#include <android/api-level.h>
+#include <android/native_window.h>
+#endif
+
 #define ARRAY_SIZE(a) std_size(a)
 
 // Disable raytracing support on macOS and iOS due to MoltenVK limitations.
@@ -590,6 +598,16 @@ Error RenderingDeviceDriverVulkan::_initialize_device_extensions() {
 	// We don't actually use this extension, but some runtime components on some platforms
 	// can and will fill the validation layers with useless info otherwise if not enabled.
 	_register_requested_device_extension(VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME, false);
+
+#ifdef ANDROID_ENABLED
+	// Required by the ASurfaceControl + AHardwareBuffer HDR presenter.
+	// All optional; we'll fall back to the standard VkSwapchainKHR path if any
+	// are missing.
+	_register_requested_device_extension(VK_KHR_EXTERNAL_MEMORY_EXTENSION_NAME, false);
+	_register_requested_device_extension(VK_ANDROID_EXTERNAL_MEMORY_ANDROID_HARDWARE_BUFFER_EXTENSION_NAME, false);
+	_register_requested_device_extension(VK_KHR_EXTERNAL_SEMAPHORE_EXTENSION_NAME, false);
+	_register_requested_device_extension(VK_KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION_NAME, false);
+#endif
 
 	if (Engine::get_singleton()->is_generate_spirv_debug_info_enabled()) {
 		_register_requested_device_extension(VK_KHR_SHADER_NON_SEMANTIC_INFO_EXTENSION_NAME, true);
@@ -1695,6 +1713,18 @@ bool RenderingDeviceDriverVulkan::_recreate_image_semaphore(CommandQueue *p_comm
 	VkSemaphore semaphore;
 	VkSemaphoreCreateInfo create_info = {};
 	create_info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+
+#ifdef ANDROID_ENABLED
+	// Match the original semaphore creation so the AHB presenter can still
+	// import an acquire fence FD into the recreated semaphore.
+	VkExportSemaphoreCreateInfo export_info = {};
+	if (enabled_device_extension_names.has(VK_KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION_NAME)) {
+		export_info.sType = VK_STRUCTURE_TYPE_EXPORT_SEMAPHORE_CREATE_INFO;
+		export_info.handleTypes = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_SYNC_FD_BIT;
+		create_info.pNext = &export_info;
+	}
+#endif
+
 	VkResult err = vkCreateSemaphore(vk_device, &create_info, VKC::get_allocation_callbacks(VK_OBJECT_TYPE_SEMAPHORE), &semaphore);
 	ERR_FAIL_COND_V_MSG(err != VK_SUCCESS, false, vformat("Couldn't create Vulkan semaphore (VkResult error %d).", err));
 
@@ -3281,11 +3311,42 @@ Error RenderingDeviceDriverVulkan::command_queue_execute_and_present(CommandQueu
 		swapchains.clear();
 		image_indices.clear();
 
+#ifdef ANDROID_ENABLED
+		// AHB-backed HDR chains are presented separately through
+		// ASurfaceControl; they don't participate in vkQueuePresentKHR.
 		for (uint32_t i = 0; i < p_swap_chains.size(); i++) {
 			SwapChain *swap_chain = (SwapChain *)(p_swap_chains[i].id);
+			if (swap_chain->hdr_swap_chain == nullptr) {
+				continue;
+			}
+
+			VkSemaphore present_semaphore = swap_chain->present_semaphores[swap_chain->image_index];
+			float ratio = context_driver->surface_get_hdr_output_max_value(swap_chain->surface);
+
+			Error present_err = swap_chain->hdr_swap_chain->present(swap_chain->image_index, present_semaphore, ratio, ratio);
+			swap_chain->image_index = UINT_MAX;
+			if (present_err != OK) {
+				context_driver->surface_set_needs_resize(swap_chain->surface, true);
+			}
+		}
+#endif
+
+		for (uint32_t i = 0; i < p_swap_chains.size(); i++) {
+			SwapChain *swap_chain = (SwapChain *)(p_swap_chains[i].id);
+#ifdef ANDROID_ENABLED
+			if (swap_chain->hdr_swap_chain != nullptr) {
+				continue;
+			}
+#endif
 			swapchains.push_back(swap_chain->vk_swapchain);
 			DEV_ASSERT(swap_chain->image_index < swap_chain->images.size());
 			image_indices.push_back(swap_chain->image_index);
+		}
+
+		if (swapchains.is_empty()) {
+			// All swap chains presented through the AHB path; nothing left for
+			// vkQueuePresentKHR. Nothing else to do here.
+			return OK;
 		}
 
 		results.resize(swapchains.size());
@@ -3314,13 +3375,21 @@ Error RenderingDeviceDriverVulkan::command_queue_execute_and_present(CommandQueu
 
 		// Set the index to an invalid value. If any of the swap chains returned out of date, indicate it should be resized the next time it's acquired.
 		bool any_result_is_out_of_date = false;
+		uint32_t result_index = 0;
 		for (uint32_t i = 0; i < p_swap_chains.size(); i++) {
 			SwapChain *swap_chain = (SwapChain *)(p_swap_chains[i].id);
+#ifdef ANDROID_ENABLED
+			if (swap_chain->hdr_swap_chain != nullptr) {
+				// Already handled in the AHB present loop above.
+				continue;
+			}
+#endif
 			swap_chain->image_index = UINT_MAX;
-			if (results[i] == VK_ERROR_OUT_OF_DATE_KHR) {
+			if (results[result_index] == VK_ERROR_OUT_OF_DATE_KHR) {
 				context_driver->surface_set_needs_resize(swap_chain->surface, true);
 				any_result_is_out_of_date = true;
 			}
+			result_index++;
 		}
 
 		if (any_result_is_out_of_date || err == VK_ERROR_OUT_OF_DATE_KHR) {
@@ -3508,11 +3577,44 @@ struct FormatCandidate {
 	RDD::ColorSpace rdd_colorspace;
 };
 
+#ifdef ANDROID_ENABLED
+bool RenderingDeviceDriverVulkan::_swap_chain_use_hdr_path(RenderingContextDriver::SurfaceID p_surface) const {
+	const bool hdr_enabled = context_driver->surface_get_hdr_output_enabled(p_surface);
+	const bool has_ahb_ext = enabled_device_extension_names.has(VK_ANDROID_EXTERNAL_MEMORY_ANDROID_HARDWARE_BUFFER_EXTENSION_NAME);
+	const bool has_sem_fd_ext = enabled_device_extension_names.has(VK_KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION_NAME);
+	const int api_level = android_get_device_api_level();
+	const bool api_ok = api_level >= 34;
+	static bool s_logged_once = false;
+	if (!s_logged_once) {
+		s_logged_once = true;
+		print_line(vformat("HDR AHB gate: hdr_enabled=%d ahb_ext=%d sem_fd_ext=%d api_level=%d",
+				int(hdr_enabled), int(has_ahb_ext), int(has_sem_fd_ext), api_level));
+	}
+	if (!hdr_enabled || !has_ahb_ext || !has_sem_fd_ext || !api_ok) {
+		return false;
+	}
+	return true;
+}
+#endif
+
 bool RenderingDeviceDriverVulkan::_determine_swap_chain_format(RenderingContextDriver::SurfaceID p_surface, VkFormat &r_format, VkColorSpaceKHR &r_color_space, RDD::ColorSpace &r_rdd_color_space) {
 	DEV_ASSERT(p_surface != 0);
 
 	RenderingContextDriverVulkan::Surface *surface = (RenderingContextDriverVulkan::Surface *)(p_surface);
 	const RenderingContextDriverVulkan::Functions &functions = context_driver->functions_get();
+
+#ifdef ANDROID_ENABLED
+	// When the AHB-backed HDR presenter is active the surface format list is
+	// irrelevant; we'll allocate the swap-chain images ourselves as
+	// VK_FORMAT_R16G16B16A16_SFLOAT in scRGB linear and present via
+	// ASurfaceTransaction.
+	if (_swap_chain_use_hdr_path(p_surface)) {
+		r_format = VK_FORMAT_R16G16B16A16_SFLOAT;
+		r_color_space = VK_COLOR_SPACE_EXTENDED_SRGB_LINEAR_EXT;
+		r_rdd_color_space = COLOR_SPACE_REC709_LINEAR;
+		return true;
+	}
+#endif
 
 	// Retrieve the formats supported by the surface.
 	uint32_t format_count = 0;
@@ -3555,9 +3657,9 @@ bool RenderingDeviceDriverVulkan::_determine_swap_chain_format(RenderingContextD
 			preferred_formats.push_back({ VK_FORMAT_R16G16B16A16_SFLOAT, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR, COLOR_SPACE_REC709_LINEAR });
 		} else if (colorspace_supported) {
 #ifdef ANDROID_ENABLED
-			// Android's Vulkan HDR output uses 10-bit packed formats with the HDR10 ST.2084 PQ color space.
-			preferred_formats.push_back({ VK_FORMAT_A2R10G10B10_UNORM_PACK32, VK_COLOR_SPACE_HDR10_ST2084_EXT, COLOR_SPACE_REC2020_NONLINEAR_ST2084 });
-			preferred_formats.push_back({ VK_FORMAT_A2B10G10R10_UNORM_PACK32, VK_COLOR_SPACE_HDR10_ST2084_EXT, COLOR_SPACE_REC2020_NONLINEAR_ST2084 });
+			// On Android, the Vulkan WSI advertises VK_COLOR_SPACE_EXTENDED_SRGB_LINEAR_EXT
+			// on some devices but presents at SDR brightness, so we don't offer it here.
+			// HDR output is only supported through the AHB presenter path above.
 #else
 			preferred_formats.push_back({ VK_FORMAT_R16G16B16A16_SFLOAT, VK_COLOR_SPACE_EXTENDED_SRGB_LINEAR_EXT, COLOR_SPACE_REC709_LINEAR });
 #endif
@@ -3612,14 +3714,31 @@ void RenderingDeviceDriverVulkan::_swap_chain_release(SwapChain *swap_chain) {
 		framebuffer_free(framebuffer);
 	}
 
-	for (VkImageView view : swap_chain->image_views) {
-		vkDestroyImageView(vk_device, view, VKC::get_allocation_callbacks(VK_OBJECT_TYPE_IMAGE_VIEW));
+#ifdef ANDROID_ENABLED
+	// The AHB-backed presenter owns its VkImageViews (they're freed in
+	// VulkanHDRSwapChain::_free_buffer below). We pushed copies into
+	// swap_chain->image_views only so framebuffer_create can reference them.
+	const bool hdr_owns_views = swap_chain->hdr_swap_chain != nullptr;
+#else
+	constexpr bool hdr_owns_views = false;
+#endif
+	if (!hdr_owns_views) {
+		for (VkImageView view : swap_chain->image_views) {
+			vkDestroyImageView(vk_device, view, VKC::get_allocation_callbacks(VK_OBJECT_TYPE_IMAGE_VIEW));
+		}
 	}
 
 	swap_chain->image_index = UINT_MAX;
 	swap_chain->images.clear();
 	swap_chain->image_views.clear();
 	swap_chain->framebuffers.clear();
+
+#ifdef ANDROID_ENABLED
+	if (swap_chain->hdr_swap_chain != nullptr) {
+		VulkanHDRSwapChain::release(swap_chain->hdr_swap_chain);
+		swap_chain->hdr_swap_chain = nullptr;
+	}
+#endif
 
 	if (swap_chain->vk_swapchain != VK_NULL_HANDLE) {
 #if defined(SWAPPY_FRAME_PACING_ENABLED)
@@ -3836,69 +3955,143 @@ Error RenderingDeviceDriverVulkan::swap_chain_resize(CommandQueueID p_cmd_queue,
 	swap_create_info.compositeAlpha = composite_alpha;
 	swap_create_info.presentMode = present_mode;
 	swap_create_info.clipped = true;
-	err = device_functions.CreateSwapchainKHR(vk_device, &swap_create_info, VKC::get_allocation_callbacks(VK_OBJECT_TYPE_SWAPCHAIN_KHR), &swap_chain->vk_swapchain);
-	ERR_FAIL_COND_V_MSG(err != VK_SUCCESS, ERR_CANT_CREATE, vformat("Couldn't create Vulkan swapchain (VkResult error %d).", err));
+
+#ifdef ANDROID_ENABLED
+	const bool use_hdr_path = _swap_chain_use_hdr_path(swap_chain->surface);
+	if (use_hdr_path) {
+		// AHB-backed presenter: allocate our own VkImages from AHardwareBuffers
+		// and skip vkCreateSwapchainKHR / Swappy entirely. The child
+		// ASurfaceControl lives in the activity window's coordinate space (not
+		// the panel's native portrait orientation), so we don't pre-rotate the
+		// rendered content the way the VkSwapchain path does. Override the
+		// rotation we picked up from `surface_transform_bits` above and use
+		// the surface's reported size directly, which is already in display
+		// orientation.
+		swap_chain->pre_transform_rotation_degrees = 0;
+
+		ANativeWindow *native_window = static_cast<OS_Android *>(OS::get_singleton())->get_native_window();
+		ERR_FAIL_NULL_V_MSG(native_window, ERR_CANT_CREATE, "Android HDR swap chain requires a native window.");
+
+		// Match the buffer to the native window's current dimensions. This is
+		// the coordinate space the child ASurfaceControl ends up in, which is
+		// not necessarily the same as the VkSurface's reported extent (which
+		// can be the panel's native portrait orientation even when the
+		// activity is laid out landscape).
+		VkExtent2D hdr_extent;
+		hdr_extent.width = static_cast<uint32_t>(MAX(ANativeWindow_getWidth(native_window), 1));
+		hdr_extent.height = static_cast<uint32_t>(MAX(ANativeWindow_getHeight(native_window), 1));
+
+		print_line(vformat("HDR AHB swap chain: anw=(%d x %d), surf_caps=(%d x %d), surf=(%d x %d), pre_xform_bits=%d",
+				ANativeWindow_getWidth(native_window), ANativeWindow_getHeight(native_window),
+				surface_capabilities.currentExtent.width, surface_capabilities.currentExtent.height,
+				surface->width, surface->height,
+				int(surface_capabilities.currentTransform)));
+
+		surface->width = hdr_extent.width;
+		surface->height = hdr_extent.height;
+
+		VulkanHDRSwapChain *hdr_chain = memnew(VulkanHDRSwapChain);
+
+		VulkanHDRSwapChain::CreateParams params;
+		params.device = vk_device;
+		params.physical_device = physical_device;
+		params.parent_window = native_window;
+		params.format = swap_chain->format;
+		params.extent = hdr_extent;
+		params.buffer_count = MAX(desired_swapchain_images, 3u);
+		params.image_usage = swap_create_info.imageUsage;
+		params.dataspace = ADATASPACE_SCRGB_LINEAR;
+		params.debug_name = "Godot HDR";
+
+		Error hdr_err = hdr_chain->create(params);
+		if (hdr_err != OK) {
+			VulkanHDRSwapChain::release(hdr_chain);
+			ERR_FAIL_V_MSG(ERR_CANT_CREATE, "Failed to create Android HDR swap chain.");
+		}
+
+		swap_chain->hdr_swap_chain = hdr_chain;
+
+		uint32_t image_count = hdr_chain->get_image_count();
+		swap_chain->images.resize(image_count);
+		swap_chain->image_views.reserve(image_count);
+		for (uint32_t i = 0; i < image_count; i++) {
+			swap_chain->images[i] = hdr_chain->get_image(i);
+			swap_chain->image_views.push_back(hdr_chain->get_image_view(i));
+		}
+	} else
+#endif
+	{
+		err = device_functions.CreateSwapchainKHR(vk_device, &swap_create_info, VKC::get_allocation_callbacks(VK_OBJECT_TYPE_SWAPCHAIN_KHR), &swap_chain->vk_swapchain);
+		ERR_FAIL_COND_V_MSG(err != VK_SUCCESS, ERR_CANT_CREATE, vformat("Couldn't create Vulkan swapchain (VkResult error %d).", err));
 
 #if defined(SWAPPY_FRAME_PACING_ENABLED)
-	if (swappy_frame_pacer_enable) {
-		SwappyVk_initAndGetRefreshCycleDuration(get_jni_env(), static_cast<OS_Android *>(OS::get_singleton())->get_godot_java()->get_activity(), physical_device,
-				vk_device, swap_chain->vk_swapchain, &swap_chain->refresh_duration);
-		SwappyVk_setWindow(vk_device, swap_chain->vk_swapchain, static_cast<OS_Android *>(OS::get_singleton())->get_native_window());
-		SwappyVk_setSwapIntervalNS(vk_device, swap_chain->vk_swapchain, swap_chain->refresh_duration);
+		if (swappy_frame_pacer_enable) {
+			SwappyVk_initAndGetRefreshCycleDuration(get_jni_env(), static_cast<OS_Android *>(OS::get_singleton())->get_godot_java()->get_activity(), physical_device,
+					vk_device, swap_chain->vk_swapchain, &swap_chain->refresh_duration);
+			SwappyVk_setWindow(vk_device, swap_chain->vk_swapchain, static_cast<OS_Android *>(OS::get_singleton())->get_native_window());
+			SwappyVk_setSwapIntervalNS(vk_device, swap_chain->vk_swapchain, swap_chain->refresh_duration);
 
-		enum SwappyModes {
-			PIPELINE_FORCED_ON,
-			AUTO_FPS_PIPELINE_FORCED_ON,
-			AUTO_FPS_AUTO_PIPELINE,
-		};
+			enum SwappyModes {
+				PIPELINE_FORCED_ON,
+				AUTO_FPS_PIPELINE_FORCED_ON,
+				AUTO_FPS_AUTO_PIPELINE,
+			};
 
-		switch (swappy_mode) {
-			case PIPELINE_FORCED_ON:
-				SwappyVk_setAutoSwapInterval(true);
-				SwappyVk_setAutoPipelineMode(true);
-				break;
-			case AUTO_FPS_PIPELINE_FORCED_ON:
-				SwappyVk_setAutoSwapInterval(true);
-				SwappyVk_setAutoPipelineMode(false);
-				break;
-			case AUTO_FPS_AUTO_PIPELINE:
-				SwappyVk_setAutoSwapInterval(false);
-				SwappyVk_setAutoPipelineMode(false);
-				break;
+			switch (swappy_mode) {
+				case PIPELINE_FORCED_ON:
+					SwappyVk_setAutoSwapInterval(true);
+					SwappyVk_setAutoPipelineMode(true);
+					break;
+				case AUTO_FPS_PIPELINE_FORCED_ON:
+					SwappyVk_setAutoSwapInterval(true);
+					SwappyVk_setAutoPipelineMode(false);
+					break;
+				case AUTO_FPS_AUTO_PIPELINE:
+					SwappyVk_setAutoSwapInterval(false);
+					SwappyVk_setAutoPipelineMode(false);
+					break;
+			}
 		}
-	}
 #endif
 
-	uint32_t image_count = 0;
-	err = device_functions.GetSwapchainImagesKHR(vk_device, swap_chain->vk_swapchain, &image_count, nullptr);
-	ERR_FAIL_COND_V_MSG(err != VK_SUCCESS, ERR_CANT_CREATE, vformat("Couldn't get Vulkan swapchain images (VkResult error %d).", err));
+		uint32_t image_count = 0;
+		err = device_functions.GetSwapchainImagesKHR(vk_device, swap_chain->vk_swapchain, &image_count, nullptr);
+		ERR_FAIL_COND_V_MSG(err != VK_SUCCESS, ERR_CANT_CREATE, vformat("Couldn't get Vulkan swapchain images (VkResult error %d).", err));
 
-	swap_chain->images.resize(image_count);
-	err = device_functions.GetSwapchainImagesKHR(vk_device, swap_chain->vk_swapchain, &image_count, swap_chain->images.ptr());
-	ERR_FAIL_COND_V_MSG(err != VK_SUCCESS, ERR_CANT_CREATE, vformat("Couldn't get Vulkan swapchain images (VkResult error %d).", err));
+		swap_chain->images.resize(image_count);
+		err = device_functions.GetSwapchainImagesKHR(vk_device, swap_chain->vk_swapchain, &image_count, swap_chain->images.ptr());
+		ERR_FAIL_COND_V_MSG(err != VK_SUCCESS, ERR_CANT_CREATE, vformat("Couldn't get Vulkan swapchain images (VkResult error %d).", err));
 
-	VkImageViewCreateInfo view_create_info = {};
-	view_create_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-	view_create_info.viewType = VK_IMAGE_VIEW_TYPE_2D;
-	view_create_info.format = swap_chain->format;
-	view_create_info.components.r = VK_COMPONENT_SWIZZLE_R;
-	view_create_info.components.g = VK_COMPONENT_SWIZZLE_G;
-	view_create_info.components.b = VK_COMPONENT_SWIZZLE_B;
-	view_create_info.components.a = VK_COMPONENT_SWIZZLE_A;
-	view_create_info.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-	view_create_info.subresourceRange.levelCount = 1;
-	view_create_info.subresourceRange.layerCount = 1;
+		VkImageViewCreateInfo view_create_info = {};
+		view_create_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+		view_create_info.viewType = VK_IMAGE_VIEW_TYPE_2D;
+		view_create_info.format = swap_chain->format;
+		view_create_info.components.r = VK_COMPONENT_SWIZZLE_R;
+		view_create_info.components.g = VK_COMPONENT_SWIZZLE_G;
+		view_create_info.components.b = VK_COMPONENT_SWIZZLE_B;
+		view_create_info.components.a = VK_COMPONENT_SWIZZLE_A;
+		view_create_info.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+		view_create_info.subresourceRange.levelCount = 1;
+		view_create_info.subresourceRange.layerCount = 1;
 
-	swap_chain->image_views.reserve(image_count);
+		swap_chain->image_views.reserve(image_count);
 
-	VkImageView image_view;
-	for (uint32_t i = 0; i < image_count; i++) {
-		view_create_info.image = swap_chain->images[i];
-		err = vkCreateImageView(vk_device, &view_create_info, VKC::get_allocation_callbacks(VK_OBJECT_TYPE_IMAGE_VIEW), &image_view);
-		ERR_FAIL_COND_V_MSG(err != VK_SUCCESS, ERR_CANT_CREATE, vformat("Couldn't create Vulkan image view for swapchain image (VkResult error %d).", err));
+		VkImageView image_view;
+		for (uint32_t i = 0; i < image_count; i++) {
+			view_create_info.image = swap_chain->images[i];
+			err = vkCreateImageView(vk_device, &view_create_info, VKC::get_allocation_callbacks(VK_OBJECT_TYPE_IMAGE_VIEW), &image_view);
+			ERR_FAIL_COND_V_MSG(err != VK_SUCCESS, ERR_CANT_CREATE, vformat("Couldn't create Vulkan image view for swapchain image (VkResult error %d).", err));
 
-		swap_chain->image_views.push_back(image_view);
+			swap_chain->image_views.push_back(image_view);
+		}
 	}
+
+	uint32_t image_count = swap_chain->images.size();
+
+	VkImageSubresourceRange swap_chain_subresource_range = {};
+	swap_chain_subresource_range.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+	swap_chain_subresource_range.levelCount = 1;
+	swap_chain_subresource_range.layerCount = 1;
 
 	swap_chain->framebuffers.reserve(image_count);
 
@@ -3958,7 +4151,7 @@ Error RenderingDeviceDriverVulkan::swap_chain_resize(CommandQueueID p_cmd_queue,
 		Framebuffer *framebuffer = memnew(Framebuffer);
 		framebuffer->vk_framebuffer = vk_framebuffer;
 		framebuffer->swap_chain_image = swap_chain->images[i];
-		framebuffer->swap_chain_image_subresource_range = view_create_info.subresourceRange;
+		framebuffer->swap_chain_image_subresource_range = swap_chain_subresource_range;
 		swap_chain->framebuffers.push_back(RDD::FramebufferID(framebuffer));
 	}
 
@@ -3966,6 +4159,18 @@ Error RenderingDeviceDriverVulkan::swap_chain_resize(CommandQueueID p_cmd_queue,
 	for (uint32_t i = 0; i < image_count; i++) {
 		VkSemaphoreCreateInfo create_info = {};
 		create_info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+
+#ifdef ANDROID_ENABLED
+		// Allow the AHB presenter to export this semaphore as a sync FD so it
+		// can attach it to ASurfaceTransaction_setBuffer's acquire fence. The
+		// extra creation info is harmless when the AHB path is not used.
+		VkExportSemaphoreCreateInfo export_info = {};
+		if (enabled_device_extension_names.has(VK_KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION_NAME)) {
+			export_info.sType = VK_STRUCTURE_TYPE_EXPORT_SEMAPHORE_CREATE_INFO;
+			export_info.handleTypes = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_SYNC_FD_BIT;
+			create_info.pNext = &export_info;
+		}
+#endif
 
 		err = vkCreateSemaphore(vk_device, &create_info, VKC::get_allocation_callbacks(VK_OBJECT_TYPE_SEMAPHORE), &vk_semaphore);
 		ERR_FAIL_COND_V_MSG(err != VK_SUCCESS, FAILED, vformat("Couldn't create Vulkan semaphore for swapchain image (VkResult error %d).", err));
@@ -3985,7 +4190,12 @@ RDD::FramebufferID RenderingDeviceDriverVulkan::swap_chain_acquire_framebuffer(C
 
 	CommandQueue *command_queue = (CommandQueue *)(p_cmd_queue.id);
 	SwapChain *swap_chain = (SwapChain *)(p_swap_chain.id);
-	if ((swap_chain->vk_swapchain == VK_NULL_HANDLE) || context_driver->surface_get_needs_resize(swap_chain->surface)) {
+#ifdef ANDROID_ENABLED
+	const bool use_hdr_chain = swap_chain->hdr_swap_chain != nullptr;
+#else
+	constexpr bool use_hdr_chain = false;
+#endif
+	if ((!use_hdr_chain && swap_chain->vk_swapchain == VK_NULL_HANDLE) || context_driver->surface_get_needs_resize(swap_chain->surface)) {
 		// The surface does not have a valid swap chain or it indicates it requires a resize.
 		r_resize_required = true;
 		return FramebufferID();
@@ -3998,6 +4208,18 @@ RDD::FramebufferID RenderingDeviceDriverVulkan::swap_chain_acquire_framebuffer(C
 		// Add a new semaphore if none are free.
 		VkSemaphoreCreateInfo create_info = {};
 		create_info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+
+#ifdef ANDROID_ENABLED
+		// Match present_semaphores' export bits so the AHB presenter can import
+		// the acquire fence FD into this semaphore.
+		VkExportSemaphoreCreateInfo export_info = {};
+		if (enabled_device_extension_names.has(VK_KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION_NAME)) {
+			export_info.sType = VK_STRUCTURE_TYPE_EXPORT_SEMAPHORE_CREATE_INFO;
+			export_info.handleTypes = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_SYNC_FD_BIT;
+			create_info.pNext = &export_info;
+		}
+#endif
+
 		err = vkCreateSemaphore(vk_device, &create_info, VKC::get_allocation_callbacks(VK_OBJECT_TYPE_SEMAPHORE), &semaphore);
 		ERR_FAIL_COND_V_MSG(err != VK_SUCCESS, FramebufferID(), vformat("Couldn't create Vulkan semaphore for acquiring swapchain image (VkResult error %d).", err));
 
@@ -4017,19 +4239,30 @@ RDD::FramebufferID RenderingDeviceDriverVulkan::swap_chain_acquire_framebuffer(C
 	swap_chain->command_queues_acquired.push_back(command_queue);
 	swap_chain->command_queues_acquired_semaphores.push_back(semaphore_index);
 
-	err = device_functions.AcquireNextImageKHR(vk_device, swap_chain->vk_swapchain, UINT64_MAX, semaphore, VK_NULL_HANDLE, &swap_chain->image_index);
-	if (err == VK_ERROR_OUT_OF_DATE_KHR) {
-		// Out of date leaves the semaphore in a signaled state that will never finish, so it's necessary to recreate it.
-		bool semaphore_recreated = _recreate_image_semaphore(command_queue, semaphore_index, true);
-		ERR_FAIL_COND_V_MSG(!semaphore_recreated, FramebufferID(), "Couldn't recreate Vulkan semaphore after swapchain becoming out of date.");
+#ifdef ANDROID_ENABLED
+	if (use_hdr_chain) {
+		Error hdr_err = swap_chain->hdr_swap_chain->acquire_next_image(semaphore, &swap_chain->image_index);
+		if (hdr_err != OK) {
+			r_resize_required = true;
+			return FramebufferID();
+		}
+	} else
+#endif
+	{
+		err = device_functions.AcquireNextImageKHR(vk_device, swap_chain->vk_swapchain, UINT64_MAX, semaphore, VK_NULL_HANDLE, &swap_chain->image_index);
+		if (err == VK_ERROR_OUT_OF_DATE_KHR) {
+			// Out of date leaves the semaphore in a signaled state that will never finish, so it's necessary to recreate it.
+			bool semaphore_recreated = _recreate_image_semaphore(command_queue, semaphore_index, true);
+			ERR_FAIL_COND_V_MSG(!semaphore_recreated, FramebufferID(), "Couldn't recreate Vulkan semaphore after swapchain becoming out of date.");
 
-		// Swap chain is out of date and must be recreated.
-		r_resize_required = true;
-		return FramebufferID();
-	} else if (err != VK_SUCCESS && err != VK_SUBOPTIMAL_KHR) {
-		// Swap chain failed to present but the reason is unknown.
-		// Refer to the comment in command_queue_present() as to why VK_SUBOPTIMAL_KHR is handled the same as VK_SUCCESS.
-		return FramebufferID();
+			// Swap chain is out of date and must be recreated.
+			r_resize_required = true;
+			return FramebufferID();
+		} else if (err != VK_SUCCESS && err != VK_SUBOPTIMAL_KHR) {
+			// Swap chain failed to present but the reason is unknown.
+			// Refer to the comment in command_queue_present() as to why VK_SUBOPTIMAL_KHR is handled the same as VK_SUCCESS.
+			return FramebufferID();
+		}
 	}
 
 	// Indicate the command queue should wait on these semaphores on the next submission and that it should
@@ -4089,6 +4322,15 @@ RDD::ColorSpace RenderingDeviceDriverVulkan::swap_chain_get_color_space(SwapChai
 bool RenderingDeviceDriverVulkan::swap_chain_get_hdr_output_supported(SwapChainID p_swap_chain) {
 	DEV_ASSERT(p_swap_chain.id != 0);
 
+#ifdef ANDROID_ENABLED
+	// On Android, HDR output is provided by the ASurfaceControl + AHardwareBuffer
+	// presenter rather than the Vulkan swapchain itself. Capability is gated by
+	// the AHB-related extensions and Android 14+ (API 34) for
+	// ASurfaceTransaction_setExtendedRangeBrightness.
+	return enabled_device_extension_names.has(VK_ANDROID_EXTERNAL_MEMORY_ANDROID_HARDWARE_BUFFER_EXTENSION_NAME) &&
+			enabled_device_extension_names.has(VK_KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION_NAME) &&
+			android_get_device_api_level() >= 34;
+#else
 	SwapChain *swap_chain = (SwapChain *)(p_swap_chain.id);
 	RenderingContextDriverVulkan::Surface *surface = (RenderingContextDriverVulkan::Surface *)(swap_chain->surface);
 	const RenderingContextDriverVulkan::Functions &functions = context_driver->functions_get();
@@ -4129,12 +4371,7 @@ bool RenderingDeviceDriverVulkan::swap_chain_get_hdr_output_supported(SwapChainI
 		// SRGB_NONLINEAR_KHR is required for some NVIDIA drivers that support HDR output but do not support PASS_THROUGH_EXT.
 		hdr_formats.push_back({ VK_FORMAT_R16G16B16A16_SFLOAT, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR, COLOR_SPACE_REC709_LINEAR });
 	} else if (colorspace_supported) {
-#ifdef ANDROID_ENABLED
-		hdr_formats.push_back({ VK_FORMAT_A2R10G10B10_UNORM_PACK32, VK_COLOR_SPACE_HDR10_ST2084_EXT, COLOR_SPACE_REC2020_NONLINEAR_ST2084 });
-		hdr_formats.push_back({ VK_FORMAT_A2B10G10R10_UNORM_PACK32, VK_COLOR_SPACE_HDR10_ST2084_EXT, COLOR_SPACE_REC2020_NONLINEAR_ST2084 });
-#else
 		hdr_formats.push_back({ VK_FORMAT_R16G16B16A16_SFLOAT, VK_COLOR_SPACE_EXTENDED_SRGB_LINEAR_EXT, COLOR_SPACE_REC709_LINEAR });
-#endif
 	} else {
 		return false;
 	}
@@ -4148,6 +4385,7 @@ bool RenderingDeviceDriverVulkan::swap_chain_get_hdr_output_supported(SwapChainI
 	}
 
 	return false;
+#endif
 }
 
 void RenderingDeviceDriverVulkan::swap_chain_set_max_fps(SwapChainID p_swap_chain, int p_max_fps) {

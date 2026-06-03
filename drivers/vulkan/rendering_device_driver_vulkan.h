@@ -419,6 +419,10 @@ public:
 private:
 	struct SwapChain {
 		VkSwapchainKHR vk_swapchain = VK_NULL_HANDLE;
+#ifdef ANDROID_ENABLED
+		// Used in place of vk_swapchain when the Android HDR path is active.
+		class VulkanHDRSwapChain *hdr_swap_chain = nullptr;
+#endif
 		RenderingContextDriver::SurfaceID surface = RenderingContextDriver::SurfaceID();
 		VkFormat format = VK_FORMAT_UNDEFINED;
 		VkColorSpaceKHR color_space = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
@@ -439,6 +443,12 @@ private:
 
 	bool _determine_swap_chain_format(RenderingContextDriver::SurfaceID p_surface, VkFormat &r_format, VkColorSpaceKHR &r_color_space, RDD::ColorSpace &r_rdd_color_space);
 	void _swap_chain_release(SwapChain *p_swap_chain);
+#ifdef ANDROID_ENABLED
+	// True when the AHB-backed HDR presenter should replace VkSwapchainKHR for
+	// the given surface (Android API 34+, HDR requested, required Vulkan
+	// extensions available).
+	bool _swap_chain_use_hdr_path(RenderingContextDriver::SurfaceID p_surface) const;
+#endif
 
 public:
 	virtual SwapChainID swap_chain_create(RenderingContextDriver::SurfaceID p_surface) override final;

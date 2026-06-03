@@ -47,6 +47,7 @@
 
 #if defined(VULKAN_ENABLED)
 #include "rendering_context_driver_vulkan_android.h"
+#include "vulkan_hdr_swap_chain.h"
 #endif
 #endif
 
@@ -481,12 +482,34 @@ void DisplayServerAndroid::_update_hdr_output(const AndroidHdrCapabilities &p_hd
 			rendering_context_global->window_set_hdr_output_enabled(p_window, desired_hdr_enabled);
 			rendering_context_global->window_set_hdr_output_linear_luminance_scale(p_window, sdr_reference);
 
-			GodotJavaViewWrapper *view = OS_Android::get_singleton()->get_godot_java()->get_godot_view();
-			if (view) {
-				if (desired_hdr_enabled) {
-					view->request_max_hdr_headroom(hdr_ratio_limit);
-				} else {
-					view->request_max_hdr_headroom(1.0f);
+			// On the AHB presenter path (Android 14+) we manage HDR headroom
+			// exclusively on our child SurfaceControl via per-frame
+			// setExtendedRangeBrightness + setDesiredHdrHeadroom calls. The
+			// parent SurfaceView's setDesiredHdrHeadroom is intentionally NOT
+			// invoked because:
+			//   * It runs on the UI thread (post()), so it races with the
+			//     render thread's first AHB present.
+			//   * It triggers View.invalidate() which can cause the
+			//     SurfaceView to recreate / reparent its own SurfaceControl,
+			//     orphaning our child SC.
+			//   * Empirically, when the SurfaceView call succeeds the panel
+			//     stays in SDR even though our child SC requests headroom of
+			//     ~10x; when the call is omitted, the per-SC requests engage
+			//     HDR mode correctly.
+			// For older devices that fall back to the regular swap chain path
+			// we still need to ask the SurfaceView for headroom.
+			bool ahb_presenter_active = false;
+#if defined(VULKAN_ENABLED)
+			ahb_presenter_active = VulkanHDRSwapChain::is_supported();
+#endif
+			if (!ahb_presenter_active) {
+				GodotJavaViewWrapper *view = OS_Android::get_singleton()->get_godot_java()->get_godot_view();
+				if (view) {
+					if (desired_hdr_enabled) {
+						view->request_max_hdr_headroom(hdr_ratio_limit);
+					} else {
+						view->request_max_hdr_headroom(1.0f);
+					}
 				}
 			}
 		}
